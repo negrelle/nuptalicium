@@ -76,6 +76,15 @@ export function signAuthenticationChallenge(challenge: string) {
 	]);
 }
 
+export function signContractAcceptance(contractId: string, payloadHash: string) {
+	return signEvent('', AUTH_EVENT_KIND, [
+		['domain', AUTH_DOMAIN],
+		['purpose', 'contract_acceptance'],
+		['contract', contractId],
+		['payload', payloadHash]
+	]);
+}
+
 export async function publishEvent(event: SignedNostrContractEvent, relayUrl = DEFAULT_RELAY_URL) {
 	await relayPool.publish([relayUrl], event);
 	return event;
