@@ -1,492 +1,487 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import {
+		createClause,
+		createContract,
+		createPenalty,
+		submitContract,
+		type ClauseKind,
+		type PenaltyType
+	} from '$lib/api/contracts';
+	import type { UserSearchResult } from '$lib/api/users';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Input from '$lib/components/Input.svelte';
-	import QRCode from '$lib/components/QRCode.svelte';
 	import StepIndicator from '$lib/components/StepIndicator.svelte';
-	import { createContractWallet } from '$lib/bitcoin';
-	import { buildContractRecord, generateContractDocument, sha256Hex } from '$lib/contract';
-	import { fetchAddressBalance } from '$lib/mempool';
-	import { npubToPubkey, signAndPublishEvent, makeContractTags } from '$lib/nostr';
-	import { upsertContract } from '$lib/stores/contract';
-	import { identityStore } from '$lib/stores/identity';
-	import type { WizardState } from '$lib/stores/wizard';
-	import { setPublishedArtifact, setPublishingState, wizardStore } from '$lib/stores/wizard';
-	import type { ContractArtifact, ContractDraft, Identity } from '$lib/types';
+	import UserPicker from '$lib/components/UserPicker.svelte';
+	import { authStore } from '$lib/stores/auth';
+	import type { AuthSession } from '$lib/types';
 	import { onMount } from 'svelte';
-	import { networks } from 'bitcoinjs-lib';
 
-	const stepLabels = [
-		'Partes',
-		'Árbitros',
-		'Colateral',
-		'Duração',
-		'Dissolução',
-		'Cláusulas',
-		'Revisão'
-	];
-
-	let wizard = $state<WizardState>({
-		step: 0,
-		draft: {
-			version: 1 as const,
-			contract_title: '',
-			npub_a: '',
-			npub_b: '',
-			arbitrator_a: '',
-			arbitrator_b: '',
-			arbitrator_neutral: '',
-			has_initial_collateral: false,
-			collateral_sats_a: 0,
-			collateral_sats_b: 0,
-			has_periodic_contributions: false,
-			frequency: 'monthly',
-			contribution_sats_a: 0,
-			contribution_sats_b: 0,
-			grace_days: 7,
-			duration_type: 'indefinite',
-			duration_years: 0,
-			has_deadmans_switch: false,
-			timeout_days: 7,
-			heir_address_a: '',
-			heir_address_b: '',
-			unilateral_dissolution_allowed: false,
-			notice_days: 7,
-			penalty_sats: 0,
-			fidelity_clause: false,
-			proof_standard: '',
-			custom_clauses: []
-		} as ContractDraft,
-		contractArtifact: null as ContractArtifact | null,
-		publishError: '',
-		publishing: false
-	});
-
-	let identity = $state<Identity | null>(null);
-	let reviewDocument = $state('');
-	let reviewHash = $state('');
-	let draftContent = $state('');
-	let publishMessage = $state('');
-
-	onMount(() => {
-		const unsubIdentity = identityStore.subscribe((value) => {
-			identity = value;
-			if (value?.npub && !wizard.draft.npub_a) {
-				wizard.draft.npub_a = value.npub;
-				commitWizard();
-			}
-		});
-
-		const unsubWizard = wizardStore.subscribe((value) => {
-			wizard = value;
-		});
-
-		return () => {
-			unsubIdentity();
-			unsubWizard();
-		};
-	});
-
-	function commitWizard() {
-		wizardStore.set(JSON.parse(JSON.stringify(wizard)));
+	interface LocalPenalty {
+		id: string;
+		type: PenaltyType;
+		value: number;
+		condition: string;
+		description: string;
 	}
 
-	function nextStep() {
-		if (wizard.step < stepLabels.length - 1) {
-			wizard.step += 1;
-			commitWizard();
+	interface LocalClause {
+		id: string;
+		title: string;
+		kind: ClauseKind;
+		description: string;
+		penalties: LocalPenalty[];
+	}
+
+	const steps = ['Participantes', 'Cláusulas', 'Revisão'];
+	let session = $state<AuthSession | null>(null);
+	let step = $state(0);
+	let title = $state('');
+	let spouseB = $state<UserSearchResult | null>(null);
+	let arbitratorA = $state<UserSearchResult | null>(null);
+	let arbitratorB = $state<UserSearchResult | null>(null);
+	let neutral = $state<UserSearchResult | null>(null);
+	let feeA = $state(0);
+	let feeB = $state(0);
+	let feeNeutral = $state(0);
+	let expiresAt = $state('');
+	let clauses = $state<LocalClause[]>([]);
+	let clauseTitle = $state('');
+	let clauseKind = $state<ClauseKind>('CONCEPT');
+	let clauseDescription = $state('');
+	let penaltyClauseId = $state('');
+	let penaltyType = $state<PenaltyType>('PERCENTAGE');
+	let penaltyValue = $state(1);
+	let penaltyCondition = $state('');
+	let penaltyDescription = $state('');
+	let saving = $state(false);
+	let error = $state('');
+	let createdContractId = $state('');
+
+	onMount(() => authStore.subscribe((value) => (session = value)));
+
+	function excludedKeys(current: UserSearchResult | null) {
+		return [
+			session?.user.publicKey,
+			...[spouseB, arbitratorA, arbitratorB, neutral]
+				.filter((user) => user && user !== current)
+				.map((user) => user!.publicKey)
+		].filter((key): key is string => Boolean(key));
+	}
+
+	function validateParticipants() {
+		if (!session) throw new Error('Sua sessão não está disponível. Entre novamente.');
+		if (!spouseB || !arbitratorA || !arbitratorB) {
+			throw new Error('Selecione o outro cônjuge e os dois árbitros obrigatórios.');
+		}
+		const keys = [
+			session.user.publicKey.toLowerCase(),
+			spouseB.publicKey.toLowerCase(),
+			arbitratorA.publicKey.toLowerCase(),
+			arbitratorB.publicKey.toLowerCase()
+		];
+		if (neutral) keys.push(neutral.publicKey.toLowerCase());
+		if (new Set(keys).size !== keys.length) {
+			throw new Error('Cada participante precisa usar uma chave Nostr diferente.');
+		}
+		if (neutral && feeNeutral <= 0) {
+			throw new Error('Informe a taxa do árbitro neutro.');
+		}
+		if (!neutral && feeNeutral > 0) {
+			throw new Error('Informe o árbitro neutro ou remova a taxa dele.');
+		}
+		if (feeA + feeB + feeNeutral > 100) {
+			throw new Error('A soma das taxas dos árbitros não pode ultrapassar 100%.');
 		}
 	}
 
-	function previousStep() {
-		if (wizard.step > 0) {
-			wizard.step -= 1;
-			commitWizard();
+	function nextStep() {
+		error = '';
+		try {
+			if (step === 0) validateParticipants();
+			step = Math.min(step + 1, steps.length - 1);
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Revise os dados informados.';
 		}
 	}
 
 	function addClause() {
-		wizard.draft.custom_clauses = [
-			...wizard.draft.custom_clauses,
-			{ title: '', description: '', proof_standard: '' }
-		];
-		commitWizard();
-	}
-
-	function removeClause(index: number) {
-		wizard.draft.custom_clauses = wizard.draft.custom_clauses.filter(
-			(_, clauseIndex) => clauseIndex !== index
-		);
-		commitWizard();
-	}
-
-	async function prepareReview() {
-		draftContent = JSON.stringify(wizard.draft);
-		reviewHash = await sha256Hex(draftContent);
-		reviewDocument = generateContractDocument(wizard.draft);
-	}
-
-	async function publishContract() {
-		wizard.publishError = '';
-		wizard.publishing = true;
-		commitWizard();
-
-		try {
-			const canonicalJson = JSON.stringify(wizard.draft);
-			const hashHex = await sha256Hex(canonicalJson);
-			const parties = [npubToPubkey(wizard.draft.npub_a), npubToPubkey(wizard.draft.npub_b)] as [
-				string,
-				string
-			];
-			const arbitrators = [
-				npubToPubkey(wizard.draft.arbitrator_a),
-				npubToPubkey(wizard.draft.arbitrator_b),
-				npubToPubkey(wizard.draft.arbitrator_neutral)
-			] as [string, string, string];
-			const wallet = createContractWallet(parties, arbitrators, 2, networks.bitcoin);
-			const signed = await signAndPublishEvent(
-				canonicalJson,
-				30000,
-				makeContractTags(wizard.draft, hashHex),
-				identity?.relayUrl
-			);
-			const balanceSats = await fetchAddressBalance(wallet.multisigAddress);
-
-			const artifact: ContractArtifact = {
-				eventId: signed.id,
-				contractHash: hashHex,
-				multisigAddress: wallet.multisigAddress,
-				multisigRedeemHex: wallet.multisigRedeemHex,
-				multisigScriptHex: wallet.multisigScriptHex,
-				partyAddresses: wallet.partyAddresses,
-				balanceSats,
-				status: 'active'
-			};
-
-			setPublishedArtifact(artifact);
-			upsertContract(buildContractRecord(artifact, wizard.draft, wizard.draft.npub_b));
-			publishMessage = 'Contrato publicado com sucesso.';
-			await prepareReview();
-			wizard.step = 6;
-			commitWizard();
-		} catch (caught) {
-			wizard.publishError =
-				caught instanceof Error ? caught.message : 'Não foi possível publicar o contrato.';
-			setPublishingState(false, wizard.publishError);
-			commitWizard();
+		error = '';
+		if (!clauseTitle.trim() || !clauseDescription.trim()) {
+			error = 'Informe o título e a descrição da cláusula.';
 			return;
 		}
-
-		setPublishingState(false);
-		commitWizard();
+		clauses.push({
+			id: crypto.randomUUID(),
+			title: clauseTitle.trim(),
+			kind: clauseKind,
+			description: clauseDescription.trim(),
+			penalties: []
+		});
+		clauseTitle = '';
+		clauseDescription = '';
+		clauseKind = 'CONCEPT';
 	}
 
-	function onFieldChange() {
-		commitWizard();
+	function removeClause(id: string) {
+		clauses = clauses.filter((clause) => clause.id !== id);
+		if (penaltyClauseId === id) penaltyClauseId = '';
 	}
 
-	$effect(() => {
-		void prepareReview();
-	});
+	function startPenalty(clauseId: string) {
+		penaltyClauseId = clauseId;
+		penaltyType = 'PERCENTAGE';
+		penaltyValue = 1;
+		penaltyCondition = '';
+		penaltyDescription = '';
+	}
+
+	function addPenalty() {
+		const clause = clauses.find((item) => item.id === penaltyClauseId);
+		if (!clause || penaltyValue <= 0 || !penaltyDescription.trim()) {
+			error = 'Informe um valor positivo e descreva a penalidade.';
+			return;
+		}
+		clause.penalties.push({
+			id: crypto.randomUUID(),
+			type: penaltyType,
+			value: penaltyValue,
+			condition: penaltyCondition.trim(),
+			description: penaltyDescription.trim()
+		});
+		penaltyClauseId = '';
+		error = '';
+	}
+
+	function removePenalty(clauseId: string, penaltyId: string) {
+		const clause = clauses.find((item) => item.id === clauseId);
+		if (clause) clause.penalties = clause.penalties.filter((penalty) => penalty.id !== penaltyId);
+	}
+
+	async function save(submitAfterSave: boolean) {
+		if (!session || saving || createdContractId) return;
+		error = '';
+		try {
+			validateParticipants();
+			if (submitAfterSave && clauses.length === 0) {
+				throw new Error('Inclua ao menos uma cláusula antes de enviar para aceite.');
+			}
+			saving = true;
+			const contract = await createContract(session.accessToken, {
+				title: title.trim() || null,
+				spouseBPublicKey: spouseB!.publicKey,
+				arbitratorAPublicKey: arbitratorA!.publicKey,
+				arbitratorBPublicKey: arbitratorB!.publicKey,
+				arbitratorNeutralPublicKey: neutral?.publicKey || null,
+				feePercArbitratorA: feeA,
+				feePercArbitratorB: feeB,
+				feePercArbitratorNeutral: neutral ? feeNeutral : null,
+				expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null
+			});
+			createdContractId = contract.id;
+
+			for (const [position, clause] of clauses.entries()) {
+				const savedClause = await createClause(session.accessToken, contract.id, {
+					title: clause.title,
+					kind: clause.kind,
+					description: clause.description,
+					position
+				});
+				for (const penalty of clause.penalties) {
+					await createPenalty(session.accessToken, contract.id, savedClause.id, {
+						type: penalty.type,
+						value: penalty.value,
+						condition: penalty.condition || null,
+						description: penalty.description
+					});
+				}
+			}
+			if (submitAfterSave) await submitContract(session.accessToken, contract.id);
+			await goto(resolve('/(app)/contracts/[id]', { id: contract.id }));
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Não foi possível salvar o contrato.';
+		} finally {
+			saving = false;
+		}
+	}
 </script>
 
-<svelte:head>
-	<title>Nupatalicium — Novo contrato</title>
-</svelte:head>
+<svelte:head><title>Nuptalicium — Novo contrato</title></svelte:head>
 
-<main class="stack-lg">
-	<section class="stack">
-		<div class="stack" style="gap: 0.75rem;">
-			<p class="muted">Criar contrato</p>
-			<h1>Wizard de 7 etapas</h1>
-		</div>
-		<StepIndicator steps={stepLabels} activeIndex={wizard.step} />
-	</section>
-
-	<Card>
-		<div class="stack step-fade-enter">
-			{#if wizard.step === 0}
-				<div class="stack">
-					<Input
-						label="npub_a"
-						bind:value={wizard.draft.npub_a}
-						description="Preenchido automaticamente com a identidade conectada."
-					/>
-					<Input
-						label="npub_b"
-						bind:value={wizard.draft.npub_b}
-						description="Formato esperado: npub1..."
-					/>
-					<Input
-						label="Título do contrato"
-						bind:value={wizard.draft.contract_title}
-						description="Opcional."
-					/>
-				</div>
-			{:else if wizard.step === 1}
-				<div class="stack">
-					<Input label="Árbitro de A" bind:value={wizard.draft.arbitrator_a} />
-					<Input label="Árbitro de B" bind:value={wizard.draft.arbitrator_b} />
-					<Input label="Árbitro neutro" bind:value={wizard.draft.arbitrator_neutral} />
-				</div>
-			{:else if wizard.step === 2}
-				<div class="stack">
-					<label class="field-toggle">
-						<span class="label">Colateral inicial</span>
-						<input
-							type="checkbox"
-							bind:checked={wizard.draft.has_initial_collateral}
-							oninput={onFieldChange}
-						/>
-					</label>
-					{#if wizard.draft.has_initial_collateral}
-						<div class="grid-2">
-							<Input
-								label="Collateral sats A"
-								type="number"
-								bind:value={wizard.draft.collateral_sats_a}
-							/>
-							<Input
-								label="Collateral sats B"
-								type="number"
-								bind:value={wizard.draft.collateral_sats_b}
-							/>
-						</div>
-					{/if}
-
-					<label class="field-toggle">
-						<span class="label">Contribuições periódicas</span>
-						<input
-							type="checkbox"
-							bind:checked={wizard.draft.has_periodic_contributions}
-							oninput={onFieldChange}
-						/>
-					</label>
-					{#if wizard.draft.has_periodic_contributions}
-						<div class="stack">
-							<div class="grid-2">
-								<label class="field">
-									<span class="label">Frequência</span>
-									<select
-										class="control"
-										bind:value={wizard.draft.frequency}
-										oninput={onFieldChange}
-									>
-										<option value="monthly">monthly</option>
-										<option value="quarterly">quarterly</option>
-										<option value="annual">annual</option>
-									</select>
-								</label>
-								<Input
-									label="Contribuição A"
-									type="number"
-									bind:value={wizard.draft.contribution_sats_a}
-								/>
-								<Input
-									label="Contribuição B"
-									type="number"
-									bind:value={wizard.draft.contribution_sats_b}
-								/>
-								<Input label="Grace days" type="number" bind:value={wizard.draft.grace_days} />
-							</div>
-						</div>
-					{/if}
-				</div>
-			{:else if wizard.step === 3}
-				<div class="stack">
-					<label class="field">
-						<span class="label">Tipo de duração</span>
-						<select class="control" bind:value={wizard.draft.duration_type} oninput={onFieldChange}>
-							<option value="indefinite">indefinite</option>
-							<option value="fixed">fixed</option>
-						</select>
-					</label>
-					{#if wizard.draft.duration_type === 'fixed'}
-						<Input label="Duração em anos" type="number" bind:value={wizard.draft.duration_years} />
-					{/if}
-
-					<label class="field-toggle">
-						<span class="label">Dead man's switch</span>
-						<input
-							type="checkbox"
-							bind:checked={wizard.draft.has_deadmans_switch}
-							oninput={onFieldChange}
-						/>
-					</label>
-					{#if wizard.draft.has_deadmans_switch}
-						<div class="stack">
-							<div class="grid-2">
-								<Input label="Timeout days" type="number" bind:value={wizard.draft.timeout_days} />
-								<Input
-									label="Herdeiro A"
-									bind:value={wizard.draft.heir_address_a}
-									description="Endereço Bitcoin bc1..."
-								/>
-								<Input
-									label="Herdeiro B"
-									bind:value={wizard.draft.heir_address_b}
-									description="Endereço Bitcoin bc1..."
-								/>
-							</div>
-						</div>
-					{/if}
-				</div>
-			{:else if wizard.step === 4}
-				<div class="stack">
-					<label class="field-toggle">
-						<span class="label">Dissolução unilateral permitida</span>
-						<input
-							type="checkbox"
-							bind:checked={wizard.draft.unilateral_dissolution_allowed}
-							oninput={onFieldChange}
-						/>
-					</label>
-					{#if wizard.draft.unilateral_dissolution_allowed}
-						<div class="grid-2">
-							<Input label="Aviso em dias" type="number" bind:value={wizard.draft.notice_days} />
-							<Input
-								label="Penalidade em sats"
-								type="number"
-								bind:value={wizard.draft.penalty_sats}
-							/>
-						</div>
-					{/if}
-				</div>
-			{:else if wizard.step === 5}
-				<div class="stack">
-					<label class="field-toggle">
-						<span class="label">Cláusula de fidelidade</span>
-						<input
-							type="checkbox"
-							bind:checked={wizard.draft.fidelity_clause}
-							oninput={onFieldChange}
-						/>
-					</label>
-					{#if wizard.draft.fidelity_clause}
-						<Input
-							textarea
-							label="Padrão de prova"
-							bind:value={wizard.draft.proof_standard}
-							rows={4}
-						/>
-					{/if}
-
-					<div class="stack">
-						<div class="row" style="justify-content: space-between;">
-							<h3>Cláusulas personalizadas</h3>
-							<Button variant="ghost" onClick={addClause}>Adicionar cláusula</Button>
-						</div>
-
-						{#each wizard.draft.custom_clauses as clause, index (clause)}
-							<Card>
-								<div class="stack">
-									<Input label="Título" bind:value={clause.title} />
-									<Input textarea label="Descrição" bind:value={clause.description} rows={3} />
-									<Input
-										textarea
-										label="Padrão de prova"
-										bind:value={clause.proof_standard}
-										rows={3}
-									/>
-									<Button variant="ghost" onClick={() => removeClause(index)}>Remover</Button>
-								</div>
-							</Card>
-						{/each}
-					</div>
-				</div>
-			{:else}
-				<div class="stack">
-					<Card>
-						<div class="stack">
-							<h2>Documento do contrato</h2>
-							<pre class="document">{reviewDocument}</pre>
-						</div>
-					</Card>
-
-					<Card>
-						<div class="stack">
-							<h3>Hash SHA-256</h3>
-							<p class="mono pill">{reviewHash}</p>
-						</div>
-					</Card>
-
-					{#if wizard.contractArtifact}
-						<Card>
-							<div class="stack">
-								<h3>Endereço multisig</h3>
-								<p class="mono">{wizard.contractArtifact.multisigAddress}</p>
-								<QRCode value={wizard.contractArtifact.multisigAddress} />
-								<p class="muted">Saldo atual: {wizard.contractArtifact.balanceSats} sats</p>
-								{#if publishMessage}
-									<p>{publishMessage}</p>
-								{/if}
-							</div>
-						</Card>
-					{/if}
-
-					{#if wizard.publishError}
-						<Card><p>{wizard.publishError}</p></Card>
-					{/if}
-				</div>
-			{/if}
-		</div>
-	</Card>
-
-	<div class="row">
-		<Button variant="ghost" onClick={previousStep} disabled={wizard.step === 0}>Voltar</Button>
-		{#if wizard.step < 6}
-			<Button onClick={nextStep}>Continuar</Button>
-		{:else}
-			<Button onClick={publishContract} disabled={wizard.publishing}>
-				{wizard.publishing ? 'Publicando…' : 'Assinar e publicar'}
-			</Button>
-		{/if}
-		<Button variant="ghost" href="/contracts">Ir para contratos</Button>
+<div class="stack-lg">
+	<div class="stack compact">
+		<p class="muted">Novo contrato</p>
+		<h1>Construa o acordo</h1>
+		<p class="muted">Você será registrado como cônjuge A.</p>
+		<p class="muted">Os demais participantes precisam ter uma conta ativa no Nuptalicium.</p>
 	</div>
-</main>
+	<StepIndicator {steps} activeIndex={step} />
+
+	{#if error}
+		<div class="error surface">{error}</div>
+	{/if}
+	{#if createdContractId && error}
+		<div class="notice surface-gray">
+			<p>
+				O rascunho foi criado, mas uma etapa posterior falhou. Abra-o para continuar sem duplicar o
+				contrato.
+			</p>
+			<a href={resolve('/(app)/contracts/[id]', { id: createdContractId })}>Continuar no rascunho</a
+			>
+		</div>
+	{/if}
+
+	{#if step === 0}
+		<Card>
+			<form
+				class="stack"
+				onsubmit={(event) => {
+					event.preventDefault();
+					nextStep();
+				}}
+			>
+				<Input label="Título" bind:value={title} placeholder="Ex.: Nosso acordo" />
+				<UserPicker
+					label="Outro cônjuge"
+					bind:value={spouseB}
+					accessToken={session?.accessToken || ''}
+					excludePublicKeys={excludedKeys(spouseB)}
+					required
+				/>
+				<div class="grid-2">
+					<UserPicker
+						label="Árbitro A"
+						bind:value={arbitratorA}
+						accessToken={session?.accessToken || ''}
+						excludePublicKeys={excludedKeys(arbitratorA)}
+						required
+					/>
+					<Input
+						label="Taxa do árbitro A (%)"
+						bind:value={feeA}
+						type="number"
+						min={0}
+						max={100}
+						step={0.01}
+						required
+					/>
+					<UserPicker
+						label="Árbitro B"
+						bind:value={arbitratorB}
+						accessToken={session?.accessToken || ''}
+						excludePublicKeys={excludedKeys(arbitratorB)}
+						required
+					/>
+					<Input
+						label="Taxa do árbitro B (%)"
+						bind:value={feeB}
+						type="number"
+						min={0}
+						max={100}
+						step={0.01}
+						required
+					/>
+					<UserPicker
+						label="Árbitro neutro (opcional)"
+						bind:value={neutral}
+						accessToken={session?.accessToken || ''}
+						excludePublicKeys={excludedKeys(neutral)}
+					/>
+					<Input
+						label="Taxa do neutro (%)"
+						bind:value={feeNeutral}
+						type="number"
+						min={0}
+						max={100}
+						step={0.01}
+					/>
+				</div>
+				<Input label="Prazo para aceite (opcional)" bind:value={expiresAt} type="datetime-local" />
+				<p class="muted">
+					A taxa configurada pela plataforma também entra no limite total de 100% e será validada
+					pela API.
+				</p>
+				<div class="row actions">
+					<Button type="submit">Continuar</Button><Button href="/contracts" variant="ghost"
+						>Cancelar</Button
+					>
+				</div>
+			</form>
+		</Card>
+	{:else if step === 1}
+		<div class="stack">
+			<Card>
+				<div class="stack">
+					<h2>Adicionar cláusula</h2>
+					<Input label="Título" bind:value={clauseTitle} required />
+					<label class="field"
+						><span class="label">Tipo</span><select bind:value={clauseKind}
+							><option value="CONCEPT">Conceito</option><option value="RULE">Regra</option></select
+						></label
+					>
+					<Input label="Descrição" bind:value={clauseDescription} textarea rows={5} required />
+					<Button onClick={addClause}>Adicionar cláusula</Button>
+				</div>
+			</Card>
+
+			{#each clauses as clause, index (clause.id)}
+				<Card>
+					<div class="stack">
+						<div class="row clause-heading">
+							<div>
+								<span class="pill">{clause.kind === 'RULE' ? 'Regra' : 'Conceito'}</span>
+								<h3>{index + 1}. {clause.title}</h3>
+							</div>
+							<button class="text-button" onclick={() => removeClause(clause.id)}>Remover</button>
+						</div>
+						<p>{clause.description}</p>
+						{#each clause.penalties as penalty (penalty.id)}
+							<div class="penalty surface-gray">
+								<div>
+									<strong
+										>{penalty.type === 'PERCENTAGE'
+											? `${penalty.value}%`
+											: `${penalty.value} sats`}</strong
+									>
+									<p>{penalty.description}</p>
+									{#if penalty.condition}<small>Condição: {penalty.condition}</small>{/if}
+								</div>
+								<button class="text-button" onclick={() => removePenalty(clause.id, penalty.id)}
+									>Remover</button
+								>
+							</div>
+						{/each}
+						{#if clause.kind === 'RULE' && penaltyClauseId !== clause.id}<Button
+								variant="ghost"
+								onClick={() => startPenalty(clause.id)}>Adicionar penalidade</Button
+							>{/if}
+						{#if penaltyClauseId === clause.id}
+							<div class="stack penalty-form surface-gray">
+								<label class="field"
+									><span class="label">Tipo da penalidade</span><select bind:value={penaltyType}
+										><option value="PERCENTAGE">Percentual</option><option value="FIXED_AMOUNT"
+											>Valor fixo em sats</option
+										></select
+									></label
+								>
+								<Input
+									label="Valor"
+									bind:value={penaltyValue}
+									type="number"
+									min={1}
+									max={penaltyType === 'PERCENTAGE' ? 100 : undefined}
+									step={1}
+									required
+								/>
+								<Input label="Condição (opcional)" bind:value={penaltyCondition} />
+								<Input label="Descrição" bind:value={penaltyDescription} textarea required />
+								<div class="row">
+									<Button onClick={addPenalty}>Salvar penalidade</Button><Button
+										variant="ghost"
+										onClick={() => (penaltyClauseId = '')}>Fechar</Button
+									>
+								</div>
+							</div>
+						{/if}
+					</div>
+				</Card>
+			{/each}
+			<div class="row actions">
+				<Button onClick={nextStep}>Revisar contrato</Button><Button
+					variant="ghost"
+					onClick={() => (step = 0)}>Voltar</Button
+				>
+			</div>
+		</div>
+	{:else}
+		<Card>
+			<div class="stack">
+				<h2>{title || 'Contrato sem título'}</h2>
+				<div class="review-grid">
+					<span>Cláusulas</span><strong>{clauses.length}</strong><span>Taxas dos árbitros</span
+					><strong>{feeA + feeB + feeNeutral}%</strong><span>Taxa da plataforma</span><strong
+						>Definida pela API</strong
+					><span>Prazo</span><strong>{expiresAt || 'Sem prazo'}</strong>
+				</div>
+				<div class="divider"></div>
+				<p>
+					Ao enviar para aceite, o conteúdo fica congelado e cada participante deverá assinar o hash
+					atual com sua identidade Nostr.
+				</p>
+				<div class="row actions">
+					<Button disabled={saving} onClick={() => save(true)}
+						>{saving ? 'Salvando…' : 'Salvar e enviar para aceite'}</Button
+					><Button variant="ghost" disabled={saving} onClick={() => save(false)}
+						>Somente salvar rascunho</Button
+					><Button variant="ghost" disabled={saving} onClick={() => (step = 1)}>Voltar</Button>
+				</div>
+			</div>
+		</Card>
+	{/if}
+</div>
 
 <style>
-	.field,
-	.field-toggle {
+	.compact {
+		gap: 0.35rem;
+	}
+	.error,
+	.notice,
+	.penalty-form {
+		padding: 1rem;
+	}
+	.error {
+		color: var(--rose-text);
+		border-color: var(--rose-300);
+	}
+	.notice a {
+		color: var(--rose-text);
+		text-decoration: underline;
+	}
+	.field {
 		display: grid;
 		gap: 0.4rem;
 	}
-
-	.field-toggle {
-		align-items: center;
-		grid-template-columns: 1fr auto;
-		padding: 0.85rem 1rem;
-		border-radius: 12px;
-		border: 1px solid var(--border-gray);
-		background: var(--gray-bg);
-	}
-
-	.field-toggle input {
-		accent-color: var(--rose-400);
-	}
-
 	.label {
 		color: var(--gray-500);
 		font-size: 0.69rem;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 	}
-
-	.control {
+	select {
 		width: 100%;
 		padding: 0.9rem 1rem;
 		border-radius: 12px;
 		border: 1px solid var(--border-gray);
 		background: var(--gray-bg);
 		color: var(--gray-900);
-		outline: none;
 	}
-
-	.document {
-		white-space: pre-wrap;
-		font-family: var(--font-mono);
-		font-size: 0.9rem;
-		line-height: 1.7;
-		margin: 0;
+	.actions,
+	.clause-heading {
+		justify-content: space-between;
+	}
+	.clause-heading {
+		align-items: start;
+	}
+	.clause-heading h3 {
+		margin-top: 0.65rem;
+	}
+	.text-button {
+		border: 0;
+		background: transparent;
+		color: var(--rose-text);
+		padding: 0;
+	}
+	.penalty {
+		padding: 0.9rem;
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.review-grid {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 0.75rem 1rem;
 	}
 </style>

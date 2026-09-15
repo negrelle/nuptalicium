@@ -1,5 +1,5 @@
 <script lang="ts">
-	type InputType = 'text' | 'email' | 'number' | 'password' | 'url' | 'tel';
+	type InputType = 'text' | 'email' | 'number' | 'password' | 'url' | 'tel' | 'datetime-local';
 	type InputMode = 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search';
 
 	let {
