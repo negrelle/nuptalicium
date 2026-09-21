@@ -4,6 +4,7 @@ import type { SignedNostrContractEvent } from '$lib/nostr';
 export type ContractStatus =
 	| 'DRAFT'
 	| 'PENDING_ACCEPTANCE'
+	| 'AWAITING_FUNDING'
 	| 'ACTIVE'
 	| 'CLOSED'
 	| 'CANCELLED'
@@ -106,6 +107,75 @@ export interface ApiPage<T> {
 	size: number;
 	first: boolean;
 	last: boolean;
+}
+
+export interface FundingTransaction {
+	id: string;
+	txid: string;
+	vout: number;
+	amountSats: number;
+	confirmations: number;
+	status: 'PENDING' | 'CONFIRMED' | 'SPENT' | 'REPLACED' | 'FAILED';
+}
+
+export interface BitcoinWallet {
+	contractId: string;
+	walletId: string;
+	network: string;
+	address: string;
+	scriptPubKey: string;
+	policyHash: string;
+	policyDocument: string;
+	arbitratorsQuorum: 2;
+	status: 'PROPOSED' | 'AWAITING_FUNDING' | 'FUNDED' | 'CLOSED';
+	confirmedBalanceSats: number;
+	requiredConfirmations: number;
+	platformFeePercent: number;
+	platformFeeAddress: string;
+	fundingTransactions: FundingTransaction[];
+}
+
+export type DecisionState =
+	| 'AWAITING_SPOUSE'
+	| 'ARBITRATION'
+	| 'APPROVED'
+	| 'REJECTED'
+	| 'SETTLING'
+	| 'SETTLED'
+	| 'CANCELLED';
+
+export interface DecisionClause {
+	id: string;
+	decisionId: string;
+	clauseId: string;
+	violated: boolean;
+	note: string | null;
+	calculatedPenaltySats: number;
+}
+
+export interface Decision {
+	id: string;
+	contractId: string;
+	userId: string;
+	reason: string;
+	result: string | null;
+	status: DecisionState;
+	beneficiaryAddress: string;
+	calculationBaseSats: number;
+	totalPenaltySats: number;
+	spendRequestEventId: string | null;
+	createdAt: string;
+	updatedAt: string;
+	clauses: DecisionClause[];
+}
+
+export interface DecisionVote {
+	id: string;
+	decisionId: string;
+	voterId: string;
+	outcome: 'APPROVE' | 'REJECT';
+	rationale: string | null;
+	createdAt: string;
 }
 
 export function listContracts(
@@ -224,6 +294,103 @@ export function deletePenalty(
 	return apiRequest<void>(
 		`/contracts/${contractId}/clauses/${clauseId}/penalties/${penaltyId}`,
 		{ method: 'DELETE' },
+		accessToken
+	);
+}
+
+export function initializeMultisig(
+	accessToken: string,
+	contractId: string,
+	payload: {
+		network: 'testnet4';
+		address: string;
+		scriptPubKey: string;
+		policyHash: string;
+		policyDocument: string;
+		arbitratorsQuorum: 2;
+	}
+) {
+	return apiRequest<BitcoinWallet>(
+		`/contracts/${contractId}/multisig`,
+		{ method: 'POST', body: JSON.stringify(payload) },
+		accessToken
+	);
+}
+
+export function getMultisig(accessToken: string, contractId: string) {
+	return apiRequest<BitcoinWallet>(`/contracts/${contractId}/multisig`, {}, accessToken);
+}
+
+export function registerFunding(
+	accessToken: string,
+	contractId: string,
+	txid: string,
+	vout: number
+) {
+	return apiRequest<BitcoinWallet>(
+		`/contracts/${contractId}/funding`,
+		{ method: 'POST', body: JSON.stringify({ txid, vout }) },
+		accessToken
+	);
+}
+
+export function refreshFunding(accessToken: string, contractId: string) {
+	return apiRequest<BitcoinWallet>(`/contracts/${contractId}/funding`, {}, accessToken);
+}
+
+export function createDecision(
+	accessToken: string,
+	contractId: string,
+	payload: { reason: string; beneficiaryAddress: string; clauseIds: string[] }
+) {
+	return apiRequest<Decision>(
+		`/contracts/${contractId}/decisions`,
+		{ method: 'POST', body: JSON.stringify(payload) },
+		accessToken
+	);
+}
+
+export function listDecisions(accessToken: string, contractId: string) {
+	return apiRequest<Decision[]>(`/contracts/${contractId}/decisions`, {}, accessToken);
+}
+
+export function getDecision(accessToken: string, decisionId: string) {
+	return apiRequest<Decision>(`/decisions/${decisionId}`, {}, accessToken);
+}
+
+export function listDecisionVotes(accessToken: string, decisionId: string) {
+	return apiRequest<DecisionVote[]>(`/decisions/${decisionId}/votes`, {}, accessToken);
+}
+
+export function voteOnDecision(
+	accessToken: string,
+	decisionId: string,
+	outcome: 'APPROVE' | 'REJECT',
+	rationale: string
+) {
+	return apiRequest<DecisionVote>(
+		`/decisions/${decisionId}/votes`,
+		{ method: 'POST', body: JSON.stringify({ outcome, rationale }) },
+		accessToken
+	);
+}
+
+export function startDecisionSettlement(accessToken: string, decisionId: string, eventId: string) {
+	return apiRequest<Decision>(
+		`/decisions/${decisionId}/resolve`,
+		{ method: 'POST', body: JSON.stringify({ note: eventId }) },
+		accessToken
+	);
+}
+
+export function broadcastDecision(
+	accessToken: string,
+	decisionId: string,
+	rawTransactionHex: string
+) {
+	return apiRequest<{ decisionId: string; txid: string; status: string }>(
+		`/decisions/${decisionId}/broadcast`,
+		{ method: 'POST', body: JSON.stringify({ rawTransactionHex }) },
 		accessToken
 	);
 }
