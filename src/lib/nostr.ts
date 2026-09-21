@@ -24,6 +24,7 @@ export interface VerdictPayload {
 
 export const AUTH_EVENT_KIND = 27235;
 export const AUTH_DOMAIN = 'nuptalicium';
+export const SPEND_REQUEST_EVENT_KIND = 26980;
 
 export function getRelayUrl(preferredRelayUrl?: string) {
 	return preferredRelayUrl || DEFAULT_RELAY_URL;
@@ -174,4 +175,34 @@ export async function fetchPresenceEvents(
 	relayUrl = DEFAULT_RELAY_URL
 ) {
 	return queryEvents({ kinds: [30001], authors: [pubkey], '#e': [contractId] }, relayUrl);
+}
+
+export interface SpendRequestPayload {
+	contractId: string;
+	decisionId: string;
+	psbtHex: string;
+	redeemOutput: string;
+	policyHash: string;
+	expiresAt: number;
+}
+
+export function publishSpendRequest(payload: SpendRequestPayload, relayUrl = DEFAULT_RELAY_URL) {
+	return signAndPublishEvent(
+		JSON.stringify(payload),
+		SPEND_REQUEST_EVENT_KIND,
+		[
+			['e', payload.contractId],
+			['d', payload.decisionId],
+			['policy', payload.policyHash],
+			['expiration', String(payload.expiresAt)]
+		],
+		relayUrl
+	);
+}
+
+export function fetchSpendRequests(decisionId: string, relayUrl = DEFAULT_RELAY_URL) {
+	return queryEvents(
+		{ kinds: [SPEND_REQUEST_EVENT_KIND], '#d': [decisionId], limit: 50 },
+		relayUrl
+	);
 }

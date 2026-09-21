@@ -127,7 +127,7 @@ export function deriveTaprootAddressFromPubkey(pubkeyHex: string, network: Netwo
 
 export function createContractWallet(
 	partyPubkeys: [string, string],
-	arbitratorPubkeys: [string, string, string],
+	arbitratorPubkeys: string[],
 	arbitratorsQuorum: number,
 	network: Network
 ): ContractWallet {
@@ -156,6 +156,31 @@ export function createContractWallet(
 		multisigRedeemHex,
 		partyAddresses
 	};
+}
+
+export async function createPolicyDocument(
+	partyPubkeys: [string, string],
+	arbitratorPubkeys: string[],
+	wallet: ContractWallet
+) {
+	const policyDocument = JSON.stringify({
+		version: 'nuptalicium-taproot-v1',
+		network: 'testnet4',
+		spouses: partyPubkeys,
+		arbitrators: arbitratorPubkeys,
+		arbitratorsQuorum: 2,
+		address: wallet.multisigAddress,
+		scriptPubKey: wallet.multisigScriptHex,
+		leaves: wallet.multisigScripts.map((item) => ({
+			script: item.leaf.output.toString('hex'),
+			pubkeys: item.combination.map((pair) => toXOnly(pair.publicKey).toString('hex'))
+		}))
+	});
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(policyDocument));
+	const policyHash = Array.from(new Uint8Array(digest), (byte) =>
+		byte.toString(16).padStart(2, '0')
+	).join('');
+	return { policyDocument, policyHash };
 }
 
 function createTapLeafScript(redeemOutputHex: string, multisig: bitcoin.payments.Payment) {
