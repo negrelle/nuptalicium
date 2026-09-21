@@ -17,6 +17,7 @@
 	const statusLabels: Record<ContractStatus, string> = {
 		DRAFT: 'Rascunho',
 		PENDING_ACCEPTANCE: 'Aguardando aceite',
+		AWAITING_FUNDING: 'Aguardando depósito',
 		ACTIVE: 'Ativo',
 		CLOSED: 'Encerrado',
 		CANCELLED: 'Cancelado',

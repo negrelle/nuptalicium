@@ -8,6 +8,10 @@
 		deleteClause,
 		deletePenalty,
 		getContract,
+		getMultisig,
+		initializeMultisig,
+		registerFunding,
+		refreshFunding,
 		submitContract,
 		updateClause,
 		updateContract,
@@ -17,9 +21,11 @@
 		type ContractClause,
 		type ContractParticipant,
 		type ContractStatus,
+		type BitcoinWallet,
 		type ParticipantRole,
 		type PenaltyType
 	} from '$lib/api/contracts';
+	import { createContractWallet, createPolicyDocument } from '$lib/bitcoin';
 	import type { UserSearchResult } from '$lib/api/users';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -29,11 +35,13 @@
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
 	import { onMount } from 'svelte';
+	import { networks } from 'bitcoinjs-lib';
 
 	let { data }: { data: { contractId: string } } = $props();
 	const statusLabels: Record<ContractStatus, string> = {
 		DRAFT: 'Rascunho',
 		PENDING_ACCEPTANCE: 'Aguardando aceite',
+		AWAITING_FUNDING: 'Aguardando depósito',
 		ACTIVE: 'Ativo',
 		CLOSED: 'Encerrado',
 		CANCELLED: 'Cancelado',
@@ -49,6 +57,7 @@
 
 	let session = $state<AuthSession | null>(null);
 	let contract = $state<Contract | null>(null);
+	let wallet = $state<BitcoinWallet | null>(null);
 	let loading = $state(true);
 	let busy = $state(false);
 	let error = $state('');
@@ -73,6 +82,8 @@
 	let penaltyValue = $state(1);
 	let penaltyCondition = $state('');
 	let penaltyDescription = $state('');
+	let fundingTxid = $state('');
+	let fundingVout = $state(0);
 
 	onMount(() => {
 		const unsubscribe = authStore.subscribe((value) => {
@@ -88,6 +99,7 @@
 		error = '';
 		try {
 			contract = await getContract(currentSession.accessToken, data.contractId);
+			wallet = await getMultisig(currentSession.accessToken, data.contractId).catch(() => null);
 		} catch (caught) {
 			error = messageOf(caught, 'Não foi possível carregar o contrato.');
 		} finally {
@@ -298,17 +310,73 @@
 	async function submitForAcceptance() {
 		if (!confirm('Enviar o contrato para aceite? O conteúdo não poderá mais ser editado.')) return;
 		await perform(async () => {
+			const { generated, policy } = await generateExpectedPolicy();
+			wallet = await initializeMultisig(session!.accessToken, contract!.id, {
+				network: 'testnet4',
+				address: generated.multisigAddress,
+				scriptPubKey: generated.multisigScriptHex,
+				policyHash: policy.policyHash,
+				policyDocument: policy.policyDocument,
+				arbitratorsQuorum: 2
+			});
 			contract = await submitContract(session!.accessToken, contract!.id);
 			success = 'Contrato enviado para aceite.';
 		});
 	}
 
+	async function addFundingTransaction() {
+		if (!contract || !session) return;
+		await perform(async () => {
+			wallet = await registerFunding(
+				session!.accessToken,
+				contract!.id,
+				fundingTxid.trim(),
+				fundingVout
+			);
+			fundingTxid = '';
+			contract = await getContract(session!.accessToken, contract!.id);
+			success = 'Depósito localizado no Bitcoin Core.';
+		});
+	}
+
+	async function updateFunding() {
+		if (!contract || !session) return;
+		await perform(async () => {
+			wallet = await refreshFunding(session!.accessToken, contract!.id);
+			contract = await getContract(session!.accessToken, contract!.id);
+			success = 'Confirmações atualizadas.';
+		});
+	}
+
 	async function accept() {
 		await perform(async () => {
+			if (!wallet) throw new Error('A política Bitcoin do contrato não foi encontrada.');
+			const { generated, policy } = await generateExpectedPolicy();
+			if (
+				generated.multisigAddress !== wallet.address ||
+				generated.multisigScriptHex !== wallet.scriptPubKey ||
+				policy.policyHash !== wallet.policyHash
+			) {
+				throw new Error('A política Bitcoin não corresponde aos participantes deste contrato.');
+			}
 			const event = await signContractAcceptance(contract!.id, contract!.payloadHash);
 			contract = await acceptContract(session!.accessToken, contract!.id, event);
 			success = 'Seu aceite foi registrado.';
 		});
+	}
+
+	async function generateExpectedPolicy() {
+		const spouseKeys = [participant('SPOUSE_A')!.publicKey, participant('SPOUSE_B')!.publicKey] as [
+			string,
+			string
+		];
+		const arbitratorKeys = [
+			participant('ARBITRATOR_A')!.publicKey,
+			participant('ARBITRATOR_B')!.publicKey,
+			participant('ARBITRATOR_NEUTRAL')?.publicKey
+		].filter((key): key is string => Boolean(key));
+		const generated = createContractWallet(spouseKeys, arbitratorKeys, 2, networks.testnet);
+		return { generated, policy: await createPolicyDocument(spouseKeys, arbitratorKeys, generated) };
 	}
 
 	async function cancel() {
@@ -560,6 +628,61 @@
 			>
 		{/if}
 
+		{#if wallet}
+			<Card>
+				<div class="stack">
+					<div class="row heading">
+						<h2>Garantia Bitcoin</h2>
+						<span class="pill">Testnet4 · {wallet.status}</span>
+					</div>
+					<p class="muted">Endereço Taproot compartilhado</p>
+					<p class="mono hash">{wallet.address}</p>
+					<p>
+						<strong>{wallet.confirmedBalanceSats.toLocaleString('pt-BR')} sats</strong> confirmados
+					</p>
+					<p class="muted">
+						Um depósito fica disponível após {wallet.requiredConfirmations} confirmações.
+					</p>
+					{#if !wallet.platformFeeAddress && wallet.platformFeePercent > 0}
+						<p class="message error surface">
+							O endereço da taxa da plataforma ainda não foi configurado. Não crie um depósito antes
+							de definir <span class="mono">PLATFORM_FEE_ADDRESS</span> na API.
+						</p>
+					{/if}
+					{#if contract.status === 'AWAITING_FUNDING' || contract.status === 'ACTIVE'}
+						<div class="grid-2">
+							<Input label="TXID do depósito" bind:value={fundingTxid} />
+							<Input
+								label="Índice do output (vout)"
+								bind:value={fundingVout}
+								type="number"
+								min={0}
+							/>
+						</div>
+						<div class="row">
+							<Button disabled={busy || fundingTxid.length !== 64} onClick={addFundingTransaction}
+								>Registrar depósito</Button
+							>
+							<Button variant="ghost" disabled={busy} onClick={updateFunding}
+								>Atualizar confirmações</Button
+							>
+						</div>
+					{/if}
+					{#each wallet.fundingTransactions as transaction (`${transaction.txid}:${transaction.vout}`)}
+						<div class="participant">
+							<div>
+								<strong>{transaction.amountSats.toLocaleString('pt-BR')} sats</strong>
+								<p class="mono identity">{transaction.txid}:{transaction.vout}</p>
+							</div>
+							<span class="acceptance" class:accepted={transaction.status === 'CONFIRMED'}
+								>{transaction.confirmations}/{wallet.requiredConfirmations}</span
+							>
+						</div>
+					{/each}
+				</div>
+			</Card>
+		{/if}
+
 		<Card>
 			<div class="stack">
 				<h2>Ações</h2>
@@ -587,9 +710,16 @@
 					{#if isSpouse()}<Button variant="ghost" disabled={busy} onClick={cancel}
 							>Cancelar contrato</Button
 						>{/if}
+				{:else if contract.status === 'AWAITING_FUNDING'}<p>
+						Todos aceitaram. O contrato será ativado após o primeiro depósito atingir três
+						confirmações.
+					</p>
 				{:else if contract.status === 'ACTIVE'}<p>
 						Todos os aceites obrigatórios foram registrados e o contrato está ativo.
 					</p>
+					{#if isSpouse()}<Button href={`/contracts/${contract.id}/dispute`}
+							>Abrir decisão econômica</Button
+						>{/if}
 				{:else}<p>Este contrato não possui ações disponíveis em sua situação atual.</p>{/if}
 			</div>
 		</Card>
