@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import {
 		listContracts,
 		type ApiPage,
@@ -9,20 +8,14 @@
 	} from '$lib/api/contracts';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
+	import ContractStatusBadge from '$lib/components/ContractStatusBadge.svelte';
+	import { CONTRACT_STATUS_LABELS } from '$lib/contract-status';
+	import { formatDateTime } from '$lib/date';
 	import { pubkeyToNpub } from '$lib/nostr';
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	const statusLabels: Record<ContractStatus, string> = {
-		DRAFT: 'Rascunho',
-		PENDING_ACCEPTANCE: 'Aguardando aceite',
-		AWAITING_FUNDING: 'Aguardando depósito',
-		ACTIVE: 'Ativo',
-		CLOSED: 'Encerrado',
-		CANCELLED: 'Cancelado',
-		EXPIRED: 'Expirado'
-	};
 	const roleLabels: Record<ParticipantRole, string> = {
 		SPOUSE_A: 'Cônjuge A',
 		SPOUSE_B: 'Cônjuge B',
@@ -83,12 +76,6 @@
 				participant.publicKey.toLowerCase() !== session?.user.publicKey.toLowerCase()
 		);
 	}
-
-	function formatDate(value: string | null) {
-		return value
-			? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium' }).format(new Date(value))
-			: 'Sem prazo';
-	}
 </script>
 
 <svelte:head><title>Nuptalicium — Contratos</title></svelte:head>
@@ -96,8 +83,7 @@
 <div class="stack-lg">
 	<section class="row heading">
 		<div class="stack compact">
-			<p class="muted">Contratos</p>
-			<h1>Seus acordos</h1>
+			<h1>Seus Contratos</h1>
 		</div>
 		<Button href="/new">Novo contrato</Button>
 	</section>
@@ -106,7 +92,7 @@
 		<span class="muted">Filtrar por situação</span>
 		<select value={status} onchange={changeStatus}>
 			<option value="">Todos</option>
-			{#each Object.entries(statusLabels) as [value, label] (value)}
+			{#each Object.entries(CONTRACT_STATUS_LABELS) as [value, label] (value)}
 				<option {value}>{label}</option>
 			{/each}
 		</select>
@@ -141,10 +127,10 @@
 									<p class="muted">Seu papel: {roleLabels[currentParticipant(contract)!.role]}</p>
 								{/if}
 							</div>
-							<span class="pill">{statusLabels[contract.status]}</span>
+							<ContractStatusBadge status={contract.status} />
 						</div>
 						{#if counterparty(contract)}
-							<p class="mono truncate">
+							<p class="technical truncate">
 								Outro cônjuge: {counterparty(contract)!.displayName ||
 									pubkeyToNpub(counterparty(contract)!.publicKey)}
 							</p>
@@ -152,11 +138,9 @@
 						<div class="summary">
 							<span>{contract.clauses.length} cláusula(s)</span>
 							<span>{contract.acceptances.length}/{contract.participants.length} aceites</span>
-							<span>{formatDate(contract.expiresAt)}</span>
+							<span>{formatDateTime(contract.expiresAt)}</span>
 						</div>
-						<a class="open-link" href={resolve('/(app)/contracts/[id]', { id: contract.id })}
-							>Abrir contrato</a
-						>
+						<Button href={`/contracts/${contract.id}`}>Abrir contrato</Button>
 					</div>
 				</Card>
 			{/each}
@@ -191,13 +175,6 @@
 		display: grid;
 		gap: 0.4rem;
 	}
-	select {
-		padding: 0.75rem 1rem;
-		border: 1px solid var(--border-gray);
-		border-radius: 12px;
-		background: var(--surface);
-		color: var(--gray-700);
-	}
 	.summary {
 		display: flex;
 		gap: 0.5rem 1rem;
@@ -209,14 +186,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-	.open-link {
-		display: inline-flex;
-		width: fit-content;
-		padding: 0.75rem 1rem;
-		border-radius: 999px;
-		background: var(--rose-400);
-		color: white;
 	}
 	.error {
 		color: var(--rose-text);

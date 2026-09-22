@@ -20,7 +20,6 @@
 		type Contract,
 		type ContractClause,
 		type ContractParticipant,
-		type ContractStatus,
 		type BitcoinWallet,
 		type ParticipantRole,
 		type PenaltyType
@@ -29,24 +28,19 @@
 	import type { UserSearchResult } from '$lib/api/users';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
+	import ContractStatusBadge from '$lib/components/ContractStatusBadge.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import UserPicker from '$lib/components/UserPicker.svelte';
+	import { formatDateTime } from '$lib/date';
 	import { pubkeyToNpub, signContractAcceptance } from '$lib/nostr';
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
+	import { faAngleLeft, faChevronDown } from '@fortawesome/free-solid-svg-icons';
+	import { FontAwesomeIcon } from '@fortawesome/svelte-fontawesome';
 	import { onMount } from 'svelte';
 	import { networks } from 'bitcoinjs-lib';
 
 	let { data }: { data: { contractId: string } } = $props();
-	const statusLabels: Record<ContractStatus, string> = {
-		DRAFT: 'Rascunho',
-		PENDING_ACCEPTANCE: 'Aguardando aceite',
-		AWAITING_FUNDING: 'Aguardando depósito',
-		ACTIVE: 'Ativo',
-		CLOSED: 'Encerrado',
-		CANCELLED: 'Cancelado',
-		EXPIRED: 'Expirado'
-	};
 	const roleLabels: Record<ParticipantRole, string> = {
 		SPOUSE_A: 'Cônjuge A',
 		SPOUSE_B: 'Cônjuge B',
@@ -128,14 +122,6 @@
 	function formatIdentity(person: ContractParticipant | undefined) {
 		if (!person) return 'Não informado';
 		return person.displayName || pubkeyToNpub(person.publicKey);
-	}
-
-	function formatDate(value: string | null) {
-		return value
-			? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeStyle: 'short' }).format(
-					new Date(value)
-				)
-			: 'Sem prazo';
 	}
 
 	function toLocalDateTime(value: string | null) {
@@ -420,12 +406,15 @@
 {:else if contract}
 	<div class="stack-lg">
 		<section class="stack compact">
-			<a class="back" href={resolve('/contracts')}>← Contratos</a>
+			<a class="back" href={resolve('/contracts')}>
+				<FontAwesomeIcon icon={faAngleLeft} />
+				<span>Contratos</span>
+			</a>
 			<div class="row heading">
 				<h1>{contract.title || 'Contrato sem título'}</h1>
-				<span class="pill">{statusLabels[contract.status]}</span>
+				<ContractStatusBadge status={contract.status} />
 			</div>
-			<p class="muted">Criado em {formatDate(contract.issuedAt)}</p>
+			<p class="muted">Criado em {formatDateTime(contract.issuedAt, 'Data indisponível')}</p>
 		</section>
 
 		{#if error}<div class="message error surface">{error}</div>{/if}
@@ -503,7 +492,7 @@
 							<div class="participant">
 								<div>
 									<strong>{roleLabels[person.role]}</strong>
-									<p class="mono identity">{formatIdentity(person)}</p>
+									<p class="technical identity">{formatIdentity(person)}</p>
 								</div>
 								<span class:accepted={person.accepted} class="acceptance"
 									>{person.accepted ? 'Aceito' : 'Pendente'}</span
@@ -518,11 +507,16 @@
 								>Neutro: {contract.feePercArbitratorNeutral}%</span
 							>{/if}<span>Plataforma: {contract.platformFeePerc}%</span>
 					</div>
-					<p class="muted">Prazo para aceite: {formatDate(contract.expiresAt)}</p>
+					<p class="muted">Prazo para aceite: {formatDateTime(contract.expiresAt)}</p>
 				{/if}
 				<details>
-					<summary>Integridade do contrato</summary>
-					<p class="mono hash">{contract.payloadHash}</p>
+					<summary>
+						<span>Integridade do contrato</span>
+						<span class="summary-icon" aria-hidden="true">
+							<FontAwesomeIcon icon={faChevronDown} />
+						</span>
+					</summary>
+					<p class="technical hash">{contract.payloadHash}</p>
 				</details>
 			</div>
 		</Card>
@@ -636,7 +630,7 @@
 						<span class="pill">Testnet4 · {wallet.status}</span>
 					</div>
 					<p class="muted">Endereço Taproot compartilhado</p>
-					<p class="mono hash">{wallet.address}</p>
+					<p class="technical hash">{wallet.address}</p>
 					<p>
 						<strong>{wallet.confirmedBalanceSats.toLocaleString('pt-BR')} sats</strong> confirmados
 					</p>
@@ -646,7 +640,7 @@
 					{#if !wallet.platformFeeAddress && wallet.platformFeePercent > 0}
 						<p class="message error surface">
 							O endereço da taxa da plataforma ainda não foi configurado. Não crie um depósito antes
-							de definir <span class="mono">PLATFORM_FEE_ADDRESS</span> na API.
+							de definir <span class="technical">PLATFORM_FEE_ADDRESS</span> na API.
 						</p>
 					{/if}
 					{#if contract.status === 'AWAITING_FUNDING' || contract.status === 'ACTIVE'}
@@ -672,7 +666,7 @@
 						<div class="participant">
 							<div>
 								<strong>{transaction.amountSats.toLocaleString('pt-BR')} sats</strong>
-								<p class="mono identity">{transaction.txid}:{transaction.vout}</p>
+								<p class="technical identity">{transaction.txid}:{transaction.vout}</p>
 							</div>
 							<span class="acceptance" class:accepted={transaction.status === 'CONFIRMED'}
 								>{transaction.confirmations}/{wallet.requiredConfirmations}</span
@@ -738,6 +732,16 @@
 	.text-button {
 		color: var(--rose-text);
 	}
+	.back {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		width: fit-content;
+		font-weight: 600;
+	}
+	.back :global(svg) {
+		width: 0.65rem;
+	}
 	.message {
 		padding: 1rem;
 	}
@@ -781,7 +785,26 @@
 		color: var(--gray-500);
 	}
 	details summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.35rem 0;
 		cursor: pointer;
+		font-weight: 600;
+		list-style: none;
+	}
+	details summary::-webkit-details-marker {
+		display: none;
+	}
+	.summary-icon {
+		display: inline-flex;
+		width: 0.8rem;
+		color: var(--gray-500);
+		transition: transform 160ms ease;
+	}
+	details[open] .summary-icon {
+		transform: rotate(180deg);
 	}
 	.hash {
 		margin-top: 0.75rem;
@@ -793,28 +816,5 @@
 		padding: 0.85rem;
 		border: 0;
 		border-radius: 10px;
-	}
-	.text-button {
-		border: 0;
-		background: transparent;
-		padding: 0;
-	}
-	.field {
-		display: grid;
-		gap: 0.4rem;
-	}
-	.label {
-		color: var(--gray-500);
-		font-size: 0.69rem;
-		letter-spacing: 0.14em;
-		text-transform: uppercase;
-	}
-	select {
-		width: 100%;
-		padding: 0.9rem 1rem;
-		border-radius: 12px;
-		border: 1px solid var(--border-gray);
-		background: var(--gray-bg);
-		color: var(--gray-900);
 	}
 </style>
