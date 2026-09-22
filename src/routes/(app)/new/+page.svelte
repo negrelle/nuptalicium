@@ -15,6 +15,7 @@
 	import Input from '$lib/components/Input.svelte';
 	import StepIndicator from '$lib/components/StepIndicator.svelte';
 	import UserPicker from '$lib/components/UserPicker.svelte';
+	import { formatDateTime } from '$lib/date';
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
 	import { onMount } from 'svelte';
@@ -212,7 +213,6 @@
 
 <div class="stack-lg">
 	<div class="stack compact">
-		<p class="muted">Novo contrato</p>
 		<h1>Construa o acordo</h1>
 		<p class="muted">Você será registrado como cônjuge A.</p>
 		<p class="muted">Os demais participantes precisam ter uma conta ativa no Nuptalicium.</p>
@@ -403,7 +403,7 @@
 					<span>Cláusulas</span><strong>{clauses.length}</strong><span>Taxas dos árbitros</span
 					><strong>{feeA + feeB + feeNeutral}%</strong><span>Taxa da plataforma</span><strong
 						>Definida pela API</strong
-					><span>Prazo</span><strong>{expiresAt || 'Sem prazo'}</strong>
+					><span>Prazo</span><strong>{formatDateTime(expiresAt)}</strong>
 				</div>
 				<div class="divider"></div>
 				<p>
@@ -439,24 +439,6 @@
 		color: var(--rose-text);
 		text-decoration: underline;
 	}
-	.field {
-		display: grid;
-		gap: 0.4rem;
-	}
-	.label {
-		color: var(--gray-500);
-		font-size: 0.69rem;
-		letter-spacing: 0.14em;
-		text-transform: uppercase;
-	}
-	select {
-		width: 100%;
-		padding: 0.9rem 1rem;
-		border-radius: 12px;
-		border: 1px solid var(--border-gray);
-		background: var(--gray-bg);
-		color: var(--gray-900);
-	}
 	.actions,
 	.clause-heading {
 		justify-content: space-between;
@@ -466,12 +448,6 @@
 	}
 	.clause-heading h3 {
 		margin-top: 0.65rem;
-	}
-	.text-button {
-		border: 0;
-		background: transparent;
-		color: var(--rose-text);
-		padding: 0;
 	}
 	.penalty {
 		padding: 0.9rem;
