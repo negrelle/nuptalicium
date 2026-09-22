@@ -56,17 +56,17 @@
 </script>
 
 <svelte:head>
-	<title>Nupatalicium</title>
+	<title>Nuptalicium</title>
 	<meta
 		name="description"
 		content="Contratos nupciais privados com Nostr e Bitcoin Justice Protocol."
 	/>
 </svelte:head>
 
-<main class="page-shell stack-lg">
-	<section class="stack surface" style="padding: 2rem;">
+<main class="page-shell auth-shell">
+	<section class="stack surface hero-panel">
 		<div class="stack" style="gap: 0.75rem;">
-			<p class="muted">Nupatalicium</p>
+			<p class="eyebrow">Nuptalicium</p>
 			<h1>Conectar identidade Nostr</h1>
 			<p>
 				Uma camada privada para contratos nupciais construída sobre Nostr e Bitcoin Justice
@@ -86,7 +86,7 @@
 
 		{#if identity?.npub && !session}
 			<Card>
-				<p>Identidade selecionada: <span class="mono">{identity.npub}</span>.</p>
+				<p>Identidade selecionada: <span class="technical">{identity.npub}</span>.</p>
 			</Card>
 		{/if}
 
@@ -97,10 +97,31 @@
 		{/if}
 
 		<div class="row">
-			<Button onClick={connect} disabled={connecting}>
+			<Button size="large" onClick={connect} disabled={connecting}>
 				{connecting ? 'Conectando…' : 'Conectar com Nostr'}
 			</Button>
 			<Button variant="ghost" href="/contracts">Ver contratos</Button>
 		</div>
 	</section>
 </main>
+
+<style>
+	.auth-shell {
+		display: grid;
+		place-items: center;
+	}
+
+	.hero-panel {
+		width: min(100%, 52rem);
+		padding: clamp(1.5rem, 4vw, 3.5rem);
+	}
+
+	.eyebrow {
+		color: var(--rose-text);
+		font-family: var(--font-display);
+		font-size: 0.9rem;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+</style>

@@ -63,31 +63,39 @@
 	}
 
 	.label {
-		color: var(--gray-500);
-		font-size: 0.69rem;
-		letter-spacing: 0.14em;
+		color: var(--gray-700);
+		font-size: 0.8rem;
+		font-weight: 600;
+		letter-spacing: 0.055em;
+		line-height: 1.25;
 		text-transform: uppercase;
 	}
 
 	.control {
 		width: 100%;
-		padding: 0.9rem 1rem;
-		border-radius: 12px;
+		min-height: var(--control-height);
+		padding: 0.78rem 0.95rem;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--border-gray);
-		background: var(--gray-bg);
+		background: var(--surface);
 		color: var(--gray-900);
+		font-size: 0.98rem;
+		font-weight: 400;
 		outline: none;
 		transition:
-			border-color 200ms ease,
-			background-color 200ms ease;
+			border-color 160ms ease,
+			box-shadow 160ms ease,
+			background-color 160ms ease;
 	}
 
 	.control:focus {
-		border-color: var(--rose-300);
+		border-color: var(--rose-400);
 		background: white;
+		box-shadow: 0 0 0 3px var(--focus-ring);
 	}
 
 	textarea.control {
+		min-height: 7rem;
 		resize: vertical;
 	}
 </style>

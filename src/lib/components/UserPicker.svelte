@@ -88,7 +88,7 @@
 		<div class="selected surface-gray">
 			<div class="identity">
 				<strong>{value.displayName || 'Usuário sem nome'}</strong>
-				<span class="mono">{shortNpub(value.publicKey)}</span>
+				<span class="technical">{shortNpub(value.publicKey)}</span>
 			</div>
 			<button type="button" onclick={clearSelection}>Trocar</button>
 		</div>
@@ -116,7 +116,7 @@
 							onclick={() => selectUser(user)}
 						>
 							<strong>{user.displayName || 'Usuário sem nome'}</strong>
-							<span class="mono">{shortNpub(user.publicKey)}</span>
+							<span class="technical">{shortNpub(user.publicKey)}</span>
 						</button>
 					{:else}
 						<p>Nenhum usuário ativo encontrado.</p>
@@ -134,9 +134,11 @@
 		gap: 0.4rem;
 	}
 	.label {
-		color: var(--gray-500);
-		font-size: 0.69rem;
-		letter-spacing: 0.14em;
+		color: var(--gray-700);
+		font-size: 0.8rem;
+		font-weight: 600;
+		letter-spacing: 0.055em;
+		line-height: 1.25;
 		text-transform: uppercase;
 	}
 	.search-wrap {
@@ -146,16 +148,23 @@
 	}
 	.control {
 		width: 100%;
-		padding: 0.9rem 1rem;
-		border-radius: 12px;
+		min-height: var(--control-height);
+		padding: 0.78rem 0.95rem;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--border-gray);
-		background: var(--gray-bg);
+		background: var(--surface);
 		color: var(--gray-900);
+		font-size: 0.98rem;
 		outline: none;
+		transition:
+			border-color 160ms ease,
+			box-shadow 160ms ease,
+			background-color 160ms ease;
 	}
 	.control:focus {
-		border-color: var(--rose-300);
+		border-color: var(--rose-400);
 		background: white;
+		box-shadow: 0 0 0 3px var(--focus-ring);
 	}
 	.selected {
 		display: flex;
@@ -169,14 +178,20 @@
 		display: grid;
 		gap: 0.15rem;
 	}
-	.identity .mono {
+	.identity .technical {
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
 	.selected button {
 		border: 0;
+		border-radius: var(--radius-sm);
 		background: transparent;
 		color: var(--rose-text);
+		font-weight: 600;
+		padding: 0.35rem 0.5rem;
+	}
+	.selected button:hover {
+		background: var(--rose-100);
 	}
 	.feedback {
 		color: var(--gray-500);
@@ -194,7 +209,7 @@
 		max-height: 18rem;
 		overflow-y: auto;
 		padding: 0.35rem;
-		box-shadow: 0 12px 30px rgba(80, 50, 50, 0.12);
+		box-shadow: 0 18px 42px rgba(80, 50, 50, 0.14);
 	}
 	.results button {
 		width: 100%;
@@ -205,11 +220,12 @@
 		border-radius: 8px;
 		background: transparent;
 		color: var(--gray-700);
+		font-weight: 400;
 		text-align: left;
 	}
 	.results button:hover,
 	.results button:focus {
-		background: var(--gray-bg);
+		background: var(--rose-100);
 	}
 	.results p {
 		padding: 0.75rem;
