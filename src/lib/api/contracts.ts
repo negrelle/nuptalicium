@@ -1,5 +1,12 @@
 import { apiRequest } from '$lib/api/client';
 import type { SignedNostrContractEvent } from '$lib/nostr';
+import type {
+	ContractRule,
+	ContractRulePayload,
+	DecisionFacts,
+	RuleSubject,
+	SpouseRole
+} from '$lib/contract-rules';
 
 export type ContractStatus =
 	| 'DRAFT'
@@ -16,7 +23,6 @@ export type ParticipantRole =
 	| 'ARBITRATOR_B'
 	| 'ARBITRATOR_NEUTRAL';
 export type ClauseKind = 'CONCEPT' | 'RULE';
-export type PenaltyType = 'PERCENTAGE' | 'FIXED_AMOUNT';
 
 export interface ContractParticipant {
 	id: string;
@@ -26,14 +32,6 @@ export interface ContractParticipant {
 	accepted: boolean;
 }
 
-export interface ClausePenalty {
-	id: string;
-	type: PenaltyType;
-	value: number;
-	condition: string | null;
-	description: string;
-}
-
 export interface ContractClause {
 	id: string;
 	title: string;
@@ -41,7 +39,7 @@ export interface ContractClause {
 	kind: ClauseKind;
 	description: string;
 	position: number;
-	penalties: ClausePenalty[];
+	rule: ContractRule | null;
 }
 
 export interface ContractAcceptance {
@@ -90,13 +88,6 @@ export interface ClausePayload {
 	kind: ClauseKind;
 	description: string;
 	position: number;
-}
-
-export interface PenaltyPayload {
-	type: PenaltyType;
-	value: number;
-	condition: string | null;
-	description: string;
 }
 
 export interface ApiPage<T> {
@@ -161,8 +152,13 @@ export interface Decision {
 	result: string | null;
 	status: DecisionState;
 	beneficiaryAddress: string;
+	beneficiaryRole: SpouseRole;
+	subject: RuleSubject;
+	offendingParty: SpouseRole;
+	facts: DecisionFacts;
 	calculationBaseSats: number;
 	totalPenaltySats: number;
+	estimatedPenaltySats: number;
 	spendRequestEventId: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -258,42 +254,44 @@ export function deleteClause(accessToken: string, contractId: string, clauseId: 
 	);
 }
 
-export function createPenalty(
+export function createCustomRuleClause(
 	accessToken: string,
 	contractId: string,
-	clauseId: string,
-	payload: PenaltyPayload
+	payload: { title: string; position: number; rule: ContractRulePayload }
 ) {
-	return apiRequest<ClausePenalty>(
-		`/contracts/${contractId}/clauses/${clauseId}/penalties`,
+	return apiRequest<ContractClause>(
+		`/contracts/${contractId}/clauses/custom`,
 		{ method: 'POST', body: JSON.stringify(payload) },
 		accessToken
 	);
 }
 
-export function updatePenalty(
+export function createClauseFromTemplate(
 	accessToken: string,
 	contractId: string,
-	clauseId: string,
-	penaltyId: string,
-	payload: PenaltyPayload
+	payload: {
+		templateId: string;
+		title: string | null;
+		position: number;
+		parameters: Record<string, number>;
+	}
 ) {
-	return apiRequest<ClausePenalty>(
-		`/contracts/${contractId}/clauses/${clauseId}/penalties/${penaltyId}`,
-		{ method: 'PUT', body: JSON.stringify(payload) },
+	return apiRequest<ContractClause>(
+		`/contracts/${contractId}/clauses/from-template`,
+		{ method: 'POST', body: JSON.stringify(payload) },
 		accessToken
 	);
 }
 
-export function deletePenalty(
+export function updateContractRule(
 	accessToken: string,
 	contractId: string,
 	clauseId: string,
-	penaltyId: string
+	rule: ContractRulePayload
 ) {
-	return apiRequest<void>(
-		`/contracts/${contractId}/clauses/${clauseId}/penalties/${penaltyId}`,
-		{ method: 'DELETE' },
+	return apiRequest<ContractClause>(
+		`/contracts/${contractId}/clauses/${clauseId}/rule`,
+		{ method: 'PUT', body: JSON.stringify({ rule }) },
 		accessToken
 	);
 }
@@ -341,7 +339,14 @@ export function refreshFunding(accessToken: string, contractId: string) {
 export function createDecision(
 	accessToken: string,
 	contractId: string,
-	payload: { reason: string; beneficiaryAddress: string; clauseIds: string[] }
+	payload: {
+		reason: string;
+		beneficiaryAddress: string;
+		clauseIds: string[];
+		subject: RuleSubject;
+		offendingParty: SpouseRole;
+		facts: DecisionFacts;
+	}
 ) {
 	return apiRequest<Decision>(
 		`/contracts/${contractId}/decisions`,

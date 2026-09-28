@@ -4,9 +4,7 @@
 		acceptContract,
 		cancelContract,
 		createClause,
-		createPenalty,
 		deleteClause,
-		deletePenalty,
 		getContract,
 		getMultisig,
 		initializeMultisig,
@@ -15,23 +13,26 @@
 		submitContract,
 		updateClause,
 		updateContract,
-		updatePenalty,
+		updateContractRule,
 		type ClauseKind,
 		type Contract,
 		type ContractClause,
 		type ContractParticipant,
 		type BitcoinWallet,
-		type ParticipantRole,
-		type PenaltyType
+		type ParticipantRole
 	} from '$lib/api/contracts';
+	import { getRuleSchema, previewRule } from '$lib/api/rules';
 	import { createContractWallet, createPolicyDocument } from '$lib/bitcoin';
 	import type { UserSearchResult } from '$lib/api/users';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import ContractStatusBadge from '$lib/components/ContractStatusBadge.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import RuleBuilder from '$lib/components/RuleBuilder.svelte';
+	import RulePreview from '$lib/components/RulePreview.svelte';
 	import UserPicker from '$lib/components/UserPicker.svelte';
 	import { formatDateTime } from '$lib/date';
+	import { cloneRule, type ContractRulePayload, type RuleSchema } from '$lib/contract-rules';
 	import { pubkeyToNpub, signContractAcceptance } from '$lib/nostr';
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
@@ -70,12 +71,11 @@
 	let clauseTitle = $state('');
 	let clauseKind = $state<ClauseKind>('CONCEPT');
 	let clauseDescription = $state('');
-	let editingPenaltyId = $state('');
-	let penaltyClauseId = $state('');
-	let penaltyType = $state<PenaltyType>('PERCENTAGE');
-	let penaltyValue = $state(1);
-	let penaltyCondition = $state('');
-	let penaltyDescription = $state('');
+	let editingRuleClauseId = $state('');
+	let ruleValue = $state<ContractRulePayload | null>(null);
+	let ruleSchema = $state<RuleSchema | null>(null);
+	let rulePreview = $state<string | null>(null);
+	let previewingRule = $state(false);
 	let fundingTxid = $state('');
 	let fundingVout = $state(0);
 
@@ -224,72 +224,56 @@
 		});
 	}
 
+	async function beginRuleEdit(clause: ContractClause) {
+		if (!session || !clause.rule) return;
+		error = '';
+		try {
+			ruleSchema ??= await getRuleSchema(session.accessToken);
+			ruleValue = cloneRule({
+				dslVersion: clause.rule.dslVersion,
+				definition: clause.rule.definition
+			});
+			editingRuleClauseId = clause.id;
+			rulePreview = clause.description;
+		} catch (caught) {
+			error = messageOf(caught, 'Não foi possível abrir o editor da regra.');
+		}
+	}
+
+	async function previewEditedRule() {
+		if (!session || !contract || !ruleValue || !editingRuleClauseId) return;
+		const clause = contract.clauses.find((item) => item.id === editingRuleClauseId);
+		if (!clause) return;
+		previewingRule = true;
+		try {
+			const preview = await previewRule(session.accessToken, clause.title, ruleValue);
+			rulePreview = preview.description;
+			if (!preview.valid) error = preview.errors.map((item) => item.message).join(' ');
+		} catch (caught) {
+			error = messageOf(caught, 'Não foi possível gerar a prévia.');
+		} finally {
+			previewingRule = false;
+		}
+	}
+
+	async function saveRule() {
+		if (!session || !contract || !ruleValue || !editingRuleClauseId) return;
+		await perform(async () => {
+			await updateContractRule(session!.accessToken, contract!.id, editingRuleClauseId, ruleValue!);
+			editingRuleClauseId = '';
+			ruleValue = null;
+			rulePreview = null;
+			await refresh();
+			success = 'Regra atualizada.';
+		});
+	}
+
 	async function removeClause(clauseId: string) {
-		if (!confirm('Remover esta cláusula e suas penalidades?')) return;
+		if (!confirm('Remover esta cláusula?')) return;
 		await perform(async () => {
 			await deleteClause(session!.accessToken, contract!.id, clauseId);
 			await refresh();
 			success = 'Cláusula removida.';
-		});
-	}
-
-	function resetPenaltyForm() {
-		editingPenaltyId = '';
-		penaltyClauseId = '';
-		penaltyType = 'PERCENTAGE';
-		penaltyValue = 1;
-		penaltyCondition = '';
-		penaltyDescription = '';
-	}
-
-	function beginPenalty(clauseId: string, penalty?: ContractClause['penalties'][number]) {
-		penaltyClauseId = clauseId;
-		editingPenaltyId = penalty?.id || '';
-		penaltyType = penalty?.type || 'PERCENTAGE';
-		penaltyValue = penalty?.value || 1;
-		penaltyCondition = penalty?.condition || '';
-		penaltyDescription = penalty?.description || '';
-	}
-
-	async function savePenalty() {
-		if (
-			!contract ||
-			!session ||
-			!penaltyClauseId ||
-			penaltyValue <= 0 ||
-			!penaltyDescription.trim()
-		) {
-			error = 'Informe um valor positivo e a descrição da penalidade.';
-			return;
-		}
-		await perform(async () => {
-			const payload = {
-				type: penaltyType,
-				value: penaltyValue,
-				condition: penaltyCondition.trim() || null,
-				description: penaltyDescription.trim()
-			};
-			if (editingPenaltyId)
-				await updatePenalty(
-					session!.accessToken,
-					contract!.id,
-					penaltyClauseId,
-					editingPenaltyId,
-					payload
-				);
-			else await createPenalty(session!.accessToken, contract!.id, penaltyClauseId, payload);
-			resetPenaltyForm();
-			await refresh();
-			success = 'Penalidade salva.';
-		});
-	}
-
-	async function removePenalty(clauseId: string, penaltyId: string) {
-		if (!confirm('Remover esta penalidade?')) return;
-		await perform(async () => {
-			await deletePenalty(session!.accessToken, contract!.id, clauseId, penaltyId);
-			await refresh();
-			success = 'Penalidade removida.';
 		});
 	}
 
@@ -535,49 +519,65 @@
 								<h3 class="clause-title">{index + 1}. {clause.title}</h3>
 							</div>
 							{#if contract.status === 'DRAFT' && isSpouse()}<div class="row">
-									<button class="text-button" onclick={() => editClause(clause)}>Editar</button
-									><button class="text-button" onclick={() => removeClause(clause.id)}
+									{#if clause.kind === 'CONCEPT'}<button
+											class="text-button"
+											onclick={() => editClause(clause)}>Editar</button
+										>{/if}
+									{#if clause.rule}<button
+											class="text-button"
+											onclick={() => void beginRuleEdit(clause)}>Editar regra</button
+										>{/if}
+									<button class="text-button" onclick={() => removeClause(clause.id)}
 										>Remover</button
 									>
 								</div>{/if}
 						</div>
 						<p>{clause.description}</p>
-						{#each clause.penalties as penalty (penalty.id)}<div class="penalty surface-gray">
-								<div>
-									<strong
-										>{penalty.type === 'PERCENTAGE'
-											? `${penalty.value}%`
-											: `${penalty.value} sats`}</strong
-									>
-									<p>{penalty.description}</p>
-									{#if penalty.condition}<small>Condição: {penalty.condition}</small>{/if}
-								</div>
-								{#if contract.status === 'DRAFT' && isSpouse()}<div class="row">
-										<button class="text-button" onclick={() => beginPenalty(clause.id, penalty)}
-											>Editar</button
-										><button
-											class="text-button"
-											onclick={() => removePenalty(clause.id, penalty.id)}>Remover</button
-										>
-									</div>{/if}
-							</div>{/each}
-						{#if clause.kind === 'RULE' && contract.status === 'DRAFT' && isSpouse() && penaltyClauseId !== clause.id}<Button
-								variant="ghost"
-								onClick={() => beginPenalty(clause.id)}>Adicionar penalidade</Button
-							>{/if}
+						{#if clause.rule}
+							<div class="rule-summary surface-gray">
+								<span><strong>Condições:</strong> {clause.rule.definition.conditions.length}</span>
+								<span>
+									<strong>Efeito:</strong>
+									{clause.rule.definition.effect.amount.value}{clause.rule.definition.effect.amount
+										.type === 'PERCENTAGE'
+										? '%'
+										: ' sats'}
+								</span>
+							</div>
+						{/if}
 					</div>
 				</Card>
 			{/each}
+			{#if editingRuleClauseId && ruleValue && ruleSchema}
+				<Card>
+					<div class="stack">
+						<h3>Editar regra estruturada</h3>
+						<RuleBuilder bind:value={ruleValue} schema={ruleSchema} />
+						<Button variant="secondary" disabled={previewingRule} onClick={previewEditedRule}
+							>Gerar prévia</Button
+						>
+						<RulePreview description={rulePreview} loading={previewingRule} />
+						<div class="row">
+							<Button disabled={busy} onClick={saveRule}>Salvar regra</Button>
+							<Button
+								variant="ghost"
+								onClick={() => {
+									editingRuleClauseId = '';
+									ruleValue = null;
+									rulePreview = null;
+								}}>Cancelar</Button
+							>
+						</div>
+					</div>
+				</Card>
+			{/if}
 			{#if contract.status === 'DRAFT' && isSpouse()}
 				<Card
 					><div class="stack">
 						<h3>{editingClauseId ? 'Editar cláusula' : 'Nova cláusula'}</h3>
-						<Input label="Título" bind:value={clauseTitle} /><label class="field"
-							><span class="label">Tipo</span><select bind:value={clauseKind}
-								><option value="CONCEPT">Conceito</option><option value="RULE">Regra</option
-								></select
-							></label
-						><Input label="Descrição" bind:value={clauseDescription} textarea />
+						<Input label="Título" bind:value={clauseTitle} />
+						<input type="hidden" bind:value={clauseKind} />
+						<Input label="Descrição do conceito" bind:value={clauseDescription} textarea />
 						<div class="row">
 							<Button disabled={busy} onClick={saveClause}
 								>{editingClauseId ? 'Atualizar' : 'Adicionar'}</Button
@@ -589,38 +589,6 @@
 				>
 			{/if}
 		</section>
-
-		{#if penaltyClauseId}
-			<Card
-				><div class="stack">
-					<h3>{editingPenaltyId ? 'Editar penalidade' : 'Nova penalidade'}</h3>
-					<label class="field"
-						><span class="label">Tipo</span><select bind:value={penaltyType}
-							><option value="PERCENTAGE">Percentual</option><option value="FIXED_AMOUNT"
-								>Valor fixo em sats</option
-							></select
-						></label
-					><Input
-						label="Valor"
-						bind:value={penaltyValue}
-						type="number"
-						min={1}
-						max={penaltyType === 'PERCENTAGE' ? 100 : undefined}
-						step={1}
-					/><Input label="Condição (opcional)" bind:value={penaltyCondition} /><Input
-						label="Descrição"
-						bind:value={penaltyDescription}
-						textarea
-					/>
-					<div class="row">
-						<Button disabled={busy} onClick={savePenalty}>Salvar</Button><Button
-							variant="ghost"
-							onClick={resetPenaltyForm}>Cancelar</Button
-						>
-					</div>
-				</div></Card
-			>
-		{/if}
 
 		{#if wallet}
 			<Card>
@@ -756,8 +724,7 @@
 		display: grid;
 		gap: 0.75rem;
 	}
-	.participant,
-	.penalty {
+	.participant {
 		display: flex;
 		justify-content: space-between;
 		align-items: start;
@@ -812,9 +779,10 @@
 	.clause-title {
 		margin-top: 0.65rem;
 	}
-	.penalty {
+	.rule-summary {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.5rem;
 		padding: 0.85rem;
-		border: 0;
-		border-radius: 10px;
 	}
 </style>

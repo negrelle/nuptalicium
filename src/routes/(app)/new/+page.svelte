@@ -1,44 +1,62 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { networks } from 'bitcoinjs-lib';
+	import {
+		listClauseTemplates,
+		previewClauseTemplate,
+		type ClauseTemplate
+	} from '$lib/api/clause-templates';
 	import {
 		createClause,
+		createClauseFromTemplate,
 		createContract,
-		createPenalty,
+		createCustomRuleClause,
+		deleteClause,
+		initializeMultisig,
 		submitContract,
-		type ClauseKind,
-		type PenaltyType
+		updateContract,
+		type BitcoinWallet,
+		type Contract,
+		type ContractPayload
 	} from '$lib/api/contracts';
+	import { getRuleSchema, previewRule } from '$lib/api/rules';
 	import type { UserSearchResult } from '$lib/api/users';
+	import { createContractWallet, createPolicyDocument } from '$lib/bitcoin';
 	import Button from '$lib/components/Button.svelte';
+	import BitcoinPolicyStep from '$lib/components/BitcoinPolicyStep.svelte';
 	import Card from '$lib/components/Card.svelte';
+	import ClauseTemplatePicker from '$lib/components/ClauseTemplatePicker.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import RuleBuilder from '$lib/components/RuleBuilder.svelte';
+	import RulePreview from '$lib/components/RulePreview.svelte';
 	import StepIndicator from '$lib/components/StepIndicator.svelte';
+	import TemplateParameterForm from '$lib/components/TemplateParameterForm.svelte';
 	import UserPicker from '$lib/components/UserPicker.svelte';
+	import {
+		cloneRule,
+		DEFAULT_RULE,
+		type ContractRulePayload,
+		type RuleSchema
+	} from '$lib/contract-rules';
 	import { formatDateTime } from '$lib/date';
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	interface LocalPenalty {
-		id: string;
-		type: PenaltyType;
-		value: number;
-		condition: string;
-		description: string;
-	}
+	type ClauseMode = 'TEMPLATE' | 'CUSTOM' | 'CONCEPT';
 
-	interface LocalClause {
-		id: string;
-		title: string;
-		kind: ClauseKind;
-		description: string;
-		penalties: LocalPenalty[];
-	}
-
-	const steps = ['Participantes', 'Cláusulas', 'Revisão'];
+	const steps = ['Participantes', 'Cláusulas e regras', 'Política Bitcoin', 'Revisão'];
 	let session = $state<AuthSession | null>(null);
 	let step = $state(0);
+	let contract = $state<Contract | null>(null);
+	let wallet = $state<BitcoinWallet | null>(null);
+	let schema = $state<RuleSchema | null>(null);
+	let templates = $state<ClauseTemplate[]>([]);
+	let loadingResources = $state(false);
+	let saving = $state(false);
+	let error = $state('');
+
 	let title = $state('');
 	let spouseB = $state<UserSearchResult | null>(null);
 	let arbitratorA = $state<UserSearchResult | null>(null);
@@ -48,20 +66,50 @@
 	let feeB = $state(0);
 	let feeNeutral = $state(0);
 	let expiresAt = $state('');
-	let clauses = $state<LocalClause[]>([]);
-	let clauseTitle = $state('');
-	let clauseKind = $state<ClauseKind>('CONCEPT');
-	let clauseDescription = $state('');
-	let penaltyClauseId = $state('');
-	let penaltyType = $state<PenaltyType>('PERCENTAGE');
-	let penaltyValue = $state(1);
-	let penaltyCondition = $state('');
-	let penaltyDescription = $state('');
-	let saving = $state(false);
-	let error = $state('');
-	let createdContractId = $state('');
 
-	onMount(() => authStore.subscribe((value) => (session = value)));
+	let clauseMode = $state<ClauseMode>('TEMPLATE');
+	let clauseTitle = $state('');
+	let conceptDescription = $state('');
+	let customRule = $state<ContractRulePayload>(cloneRule(DEFAULT_RULE));
+	let selectedTemplateId = $state('');
+	let templateValues = $state<Record<string, number>>({});
+	let previewDescription = $state<string | null>(null);
+	let previewing = $state(false);
+
+	let selectedTemplate = $derived(templates.find((item) => item.id === selectedTemplateId) ?? null);
+
+	onMount(() => {
+		let loadedFor = '';
+		return authStore.subscribe((value) => {
+			session = value;
+			if (value && value.user.id !== loadedFor) {
+				loadedFor = value.user.id;
+				void loadResources(value);
+			}
+		});
+	});
+
+	async function loadResources(activeSession: AuthSession) {
+		loadingResources = true;
+		try {
+			[schema, templates] = await Promise.all([
+				getRuleSchema(activeSession.accessToken),
+				listClauseTemplates(activeSession.accessToken)
+			]);
+		} catch (caught) {
+			error = message(caught, 'Não foi possível carregar as opções de cláusula.');
+		} finally {
+			loadingResources = false;
+		}
+	}
+
+	function message(caught: unknown, fallback: string) {
+		return caught instanceof Error ? caught.message : fallback;
+	}
+
+	function userName(user: UserSearchResult | null) {
+		return user?.displayName || (user ? `${user.publicKey.slice(0, 12)}…` : 'Não informado');
+	}
 
 	function excludedKeys(current: UserSearchResult | null) {
 		return [
@@ -78,131 +126,189 @@
 			throw new Error('Selecione o outro cônjuge e os dois árbitros obrigatórios.');
 		}
 		const keys = [
-			session.user.publicKey.toLowerCase(),
-			spouseB.publicKey.toLowerCase(),
-			arbitratorA.publicKey.toLowerCase(),
-			arbitratorB.publicKey.toLowerCase()
+			session.user.publicKey,
+			spouseB.publicKey,
+			arbitratorA.publicKey,
+			arbitratorB.publicKey
 		];
-		if (neutral) keys.push(neutral.publicKey.toLowerCase());
-		if (new Set(keys).size !== keys.length) {
+		if (neutral) keys.push(neutral.publicKey);
+		if (new Set(keys.map((key) => key.toLowerCase())).size !== keys.length) {
 			throw new Error('Cada participante precisa usar uma chave Nostr diferente.');
 		}
-		if (neutral && feeNeutral <= 0) {
-			throw new Error('Informe a taxa do árbitro neutro.');
-		}
-		if (!neutral && feeNeutral > 0) {
+		if (neutral && feeNeutral <= 0) throw new Error('Informe a taxa do árbitro neutro.');
+		if (!neutral && feeNeutral > 0)
 			throw new Error('Informe o árbitro neutro ou remova a taxa dele.');
-		}
 		if (feeA + feeB + feeNeutral > 100) {
 			throw new Error('A soma das taxas dos árbitros não pode ultrapassar 100%.');
 		}
 	}
 
-	function nextStep() {
+	function contractPayload(): ContractPayload {
+		validateParticipants();
+		return {
+			title: title.trim() || null,
+			spouseBPublicKey: spouseB!.publicKey,
+			arbitratorAPublicKey: arbitratorA!.publicKey,
+			arbitratorBPublicKey: arbitratorB!.publicKey,
+			arbitratorNeutralPublicKey: neutral?.publicKey || null,
+			feePercArbitratorA: feeA,
+			feePercArbitratorB: feeB,
+			feePercArbitratorNeutral: neutral ? feeNeutral : null,
+			expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null
+		};
+	}
+
+	async function saveParticipants() {
+		if (!session || saving) return;
 		error = '';
+		saving = true;
 		try {
-			if (step === 0) validateParticipants();
-			step = Math.min(step + 1, steps.length - 1);
+			const payload = contractPayload();
+			contract = contract
+				? await updateContract(session.accessToken, contract.id, payload)
+				: await createContract(session.accessToken, payload);
+			step = 1;
 		} catch (caught) {
-			error = caught instanceof Error ? caught.message : 'Revise os dados informados.';
+			error = message(caught, 'Não foi possível salvar os participantes.');
+		} finally {
+			saving = false;
 		}
 	}
 
-	function addClause() {
-		error = '';
-		if (!clauseTitle.trim() || !clauseDescription.trim()) {
-			error = 'Informe o título e a descrição da cláusula.';
-			return;
-		}
-		clauses.push({
-			id: crypto.randomUUID(),
-			title: clauseTitle.trim(),
-			kind: clauseKind,
-			description: clauseDescription.trim(),
-			penalties: []
-		});
-		clauseTitle = '';
-		clauseDescription = '';
-		clauseKind = 'CONCEPT';
+	function selectTemplate(id: string) {
+		const template = templates.find((item) => item.id === id);
+		clauseTitle = template?.title ?? '';
+		templateValues = Object.fromEntries(
+			(template?.definition.parameters ?? []).map((parameter) => [
+				parameter.name,
+				parameter.defaultValue ?? parameter.minimum ?? 0
+			])
+		);
+		previewDescription = null;
 	}
 
-	function removeClause(id: string) {
-		clauses = clauses.filter((clause) => clause.id !== id);
-		if (penaltyClauseId === id) penaltyClauseId = '';
-	}
-
-	function startPenalty(clauseId: string) {
-		penaltyClauseId = clauseId;
-		penaltyType = 'PERCENTAGE';
-		penaltyValue = 1;
-		penaltyCondition = '';
-		penaltyDescription = '';
-	}
-
-	function addPenalty() {
-		const clause = clauses.find((item) => item.id === penaltyClauseId);
-		if (!clause || penaltyValue <= 0 || !penaltyDescription.trim()) {
-			error = 'Informe um valor positivo e descreva a penalidade.';
-			return;
-		}
-		clause.penalties.push({
-			id: crypto.randomUUID(),
-			type: penaltyType,
-			value: penaltyValue,
-			condition: penaltyCondition.trim(),
-			description: penaltyDescription.trim()
-		});
-		penaltyClauseId = '';
-		error = '';
-	}
-
-	function removePenalty(clauseId: string, penaltyId: string) {
-		const clause = clauses.find((item) => item.id === clauseId);
-		if (clause) clause.penalties = clause.penalties.filter((penalty) => penalty.id !== penaltyId);
-	}
-
-	async function save(submitAfterSave: boolean) {
-		if (!session || saving || createdContractId) return;
+	async function generatePreview() {
+		if (!session) return;
+		previewing = true;
 		error = '';
 		try {
-			validateParticipants();
-			if (submitAfterSave && clauses.length === 0) {
-				throw new Error('Inclua ao menos uma cláusula antes de enviar para aceite.');
-			}
-			saving = true;
-			const contract = await createContract(session.accessToken, {
-				title: title.trim() || null,
-				spouseBPublicKey: spouseB!.publicKey,
-				arbitratorAPublicKey: arbitratorA!.publicKey,
-				arbitratorBPublicKey: arbitratorB!.publicKey,
-				arbitratorNeutralPublicKey: neutral?.publicKey || null,
-				feePercArbitratorA: feeA,
-				feePercArbitratorB: feeB,
-				feePercArbitratorNeutral: neutral ? feeNeutral : null,
-				expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null
-			});
-			createdContractId = contract.id;
+			const result =
+				clauseMode === 'TEMPLATE' && selectedTemplate
+					? await previewClauseTemplate(
+							session.accessToken,
+							selectedTemplate.id,
+							clauseTitle,
+							templateValues
+						)
+					: await previewRule(session.accessToken, clauseTitle, customRule);
+			previewDescription = result.description;
+			if (!result.valid) error = result.errors.map((item) => item.message).join(' ');
+		} catch (caught) {
+			previewDescription = null;
+			error = message(caught, 'Não foi possível gerar a prévia.');
+		} finally {
+			previewing = false;
+		}
+	}
 
-			for (const [position, clause] of clauses.entries()) {
-				const savedClause = await createClause(session.accessToken, contract.id, {
-					title: clause.title,
-					kind: clause.kind,
-					description: clause.description,
+	async function addClause() {
+		if (!session || !contract || saving) return;
+		error = '';
+		saving = true;
+		try {
+			const position = contract.clauses.length;
+			let clause;
+			if (clauseMode === 'TEMPLATE') {
+				if (!selectedTemplate) throw new Error('Escolha um modelo de cláusula.');
+				clause = await createClauseFromTemplate(session.accessToken, contract.id, {
+					templateId: selectedTemplate.id,
+					title: clauseTitle.trim() || null,
+					position,
+					parameters: templateValues
+				});
+			} else if (clauseMode === 'CUSTOM') {
+				if (!clauseTitle.trim()) throw new Error('Informe o título da regra.');
+				clause = await createCustomRuleClause(session.accessToken, contract.id, {
+					title: clauseTitle.trim(),
+					position,
+					rule: customRule
+				});
+			} else {
+				if (!clauseTitle.trim() || !conceptDescription.trim()) {
+					throw new Error('Informe o título e a descrição do conceito.');
+				}
+				clause = await createClause(session.accessToken, contract.id, {
+					title: clauseTitle.trim(),
+					kind: 'CONCEPT',
+					description: conceptDescription.trim(),
 					position
 				});
-				for (const penalty of clause.penalties) {
-					await createPenalty(session.accessToken, contract.id, savedClause.id, {
-						type: penalty.type,
-						value: penalty.value,
-						condition: penalty.condition || null,
-						description: penalty.description
-					});
-				}
 			}
-			if (submitAfterSave) await submitContract(session.accessToken, contract.id);
+			contract = { ...contract, clauses: [...contract.clauses, clause] };
+			clauseTitle = '';
+			conceptDescription = '';
+			selectedTemplateId = '';
+			templateValues = {};
+			customRule = cloneRule(DEFAULT_RULE);
+			previewDescription = null;
+		} catch (caught) {
+			error = message(caught, 'Não foi possível adicionar a cláusula.');
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function removeClause(clauseId: string) {
+		if (!session || !contract || saving) return;
+		saving = true;
+		error = '';
+		try {
+			await deleteClause(session.accessToken, contract.id, clauseId);
+			contract = {
+				...contract,
+				clauses: contract.clauses.filter((clause) => clause.id !== clauseId)
+			};
+		} catch (caught) {
+			error = message(caught, 'Não foi possível remover a cláusula.');
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function initializePolicy() {
+		if (!session || !contract || !spouseB || !arbitratorA || !arbitratorB || saving) return;
+		error = '';
+		saving = true;
+		try {
+			const spouses: [string, string] = [session.user.publicKey, spouseB.publicKey];
+			const arbitrators = [arbitratorA.publicKey, arbitratorB.publicKey];
+			if (neutral) arbitrators.push(neutral.publicKey);
+			const generated = createContractWallet(spouses, arbitrators, 2, networks.testnet);
+			const policy = await createPolicyDocument(spouses, arbitrators, generated);
+			wallet = await initializeMultisig(session.accessToken, contract.id, {
+				network: 'testnet4',
+				address: generated.multisigAddress,
+				scriptPubKey: generated.multisigScriptHex,
+				policyHash: policy.policyHash,
+				policyDocument: policy.policyDocument,
+				arbitratorsQuorum: 2
+			});
+		} catch (caught) {
+			error = message(caught, 'Não foi possível inicializar a política Bitcoin.');
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function finish() {
+		if (!session || !contract || !wallet || saving) return;
+		saving = true;
+		error = '';
+		try {
+			await submitContract(session.accessToken, contract.id);
 			await goto(resolve('/(app)/contracts/[id]', { id: contract.id }));
 		} catch (caught) {
-			error = caught instanceof Error ? caught.message : 'Não foi possível salvar o contrato.';
+			error = message(caught, 'Não foi possível enviar o contrato para aceite.');
 		} finally {
 			saving = false;
 		}
@@ -214,23 +320,13 @@
 <div class="stack-lg">
 	<div class="stack compact">
 		<h1>Construa o acordo</h1>
-		<p class="muted">Você será registrado como cônjuge A.</p>
-		<p class="muted">Os demais participantes precisam ter uma conta ativa no Nuptalicium.</p>
+		<p class="muted">Defina os participantes, as regras executáveis e a política Bitcoin.</p>
 	</div>
 	<StepIndicator {steps} activeIndex={step} />
 
-	{#if error}
-		<div class="error surface">{error}</div>
-	{/if}
-	{#if createdContractId && error}
-		<div class="notice surface-gray">
-			<p>
-				O rascunho foi criado, mas uma etapa posterior falhou. Abra-o para continuar sem duplicar o
-				contrato.
-			</p>
-			<a href={resolve('/(app)/contracts/[id]', { id: createdContractId })}>Continuar no rascunho</a
-			>
-		</div>
+	{#if error}<div class="error surface">{error}</div>{/if}
+	{#if contract}
+		<p class="draft-note muted">Rascunho salvo automaticamente: {contract.id}</p>
 	{/if}
 
 	{#if step === 0}
@@ -239,7 +335,7 @@
 				class="stack"
 				onsubmit={(event) => {
 					event.preventDefault();
-					nextStep();
+					void saveParticipants();
 				}}
 			>
 				<Input label="Título" bind:value={title} placeholder="Ex.: Nosso acordo" />
@@ -299,123 +395,160 @@
 					/>
 				</div>
 				<Input label="Prazo para aceite (opcional)" bind:value={expiresAt} type="datetime-local" />
-				<p class="muted">
-					A taxa configurada pela plataforma também entra no limite total de 100% e será validada
-					pela API.
-				</p>
 				<div class="row actions">
-					<Button type="submit">Continuar</Button><Button href="/contracts" variant="ghost"
-						>Cancelar</Button
-					>
+					<Button type="submit" disabled={saving}>{saving ? 'Salvando…' : 'Continuar'}</Button
+					><Button href="/contracts" variant="ghost">Cancelar</Button>
 				</div>
 			</form>
 		</Card>
 	{:else if step === 1}
-		<div class="stack">
+		<div class="stack-lg">
 			<Card>
 				<div class="stack">
 					<h2>Adicionar cláusula</h2>
-					<Input label="Título" bind:value={clauseTitle} required />
-					<label class="field"
-						><span class="label">Tipo</span><select bind:value={clauseKind}
-							><option value="CONCEPT">Conceito</option><option value="RULE">Regra</option></select
-						></label
+					<div class="mode-tabs" role="tablist" aria-label="Tipo da cláusula">
+						{#each [['TEMPLATE', 'Usar modelo'], ['CUSTOM', 'Criar regra'], ['CONCEPT', 'Conceito']] as option (option[0])}
+							<button
+								type="button"
+								class:active={clauseMode === option[0]}
+								onclick={() => {
+									clauseMode = option[0] as ClauseMode;
+									previewDescription = null;
+								}}>{option[1]}</button
+							>
+						{/each}
+					</div>
+
+					{#if loadingResources}
+						<p class="muted">Carregando regras…</p>
+					{:else if clauseMode === 'TEMPLATE'}
+						<ClauseTemplatePicker
+							{templates}
+							bind:selectedId={selectedTemplateId}
+							onSelect={selectTemplate}
+						/>
+						{#if selectedTemplate}
+							<Input label="Título da cláusula" bind:value={clauseTitle} />
+							<p class="muted">{selectedTemplate.description}</p>
+							<TemplateParameterForm template={selectedTemplate} bind:values={templateValues} />
+							<Button variant="secondary" onClick={generatePreview} disabled={previewing}
+								>Gerar prévia</Button
+							>
+							<RulePreview description={previewDescription} loading={previewing} />
+						{/if}
+					{:else if clauseMode === 'CUSTOM'}
+						<Input label="Título da regra" bind:value={clauseTitle} required />
+						{#if schema}<RuleBuilder bind:value={customRule} {schema} />{/if}
+						<Button variant="secondary" onClick={generatePreview} disabled={previewing}
+							>Gerar prévia</Button
+						>
+						<RulePreview description={previewDescription} loading={previewing} />
+					{:else}
+						<Input label="Título do conceito" bind:value={clauseTitle} required />
+						<Input label="Descrição" bind:value={conceptDescription} textarea rows={5} required />
+					{/if}
+					<Button onClick={addClause} disabled={saving}
+						>{saving ? 'Adicionando…' : 'Adicionar ao contrato'}</Button
 					>
-					<Input label="Descrição" bind:value={clauseDescription} textarea rows={5} required />
-					<Button onClick={addClause}>Adicionar cláusula</Button>
 				</div>
 			</Card>
 
-			{#each clauses as clause, index (clause.id)}
+			{#each contract?.clauses ?? [] as clause, index (clause.id)}
 				<Card>
-					<div class="stack">
+					<div class="stack clause-card">
 						<div class="row clause-heading">
-							<div>
-								<span class="pill">{clause.kind === 'RULE' ? 'Regra' : 'Conceito'}</span>
-								<h3>{index + 1}. {clause.title}</h3>
+							<div class="row">
+								<span class="clause-type">{clause.kind === 'RULE' ? 'Regra' : 'Conceito'}</span
+								><strong>{index + 1}. {clause.title}</strong>
 							</div>
-							<button class="text-button" onclick={() => removeClause(clause.id)}>Remover</button>
+							<button
+								class="text-button"
+								disabled={saving}
+								onclick={() => void removeClause(clause.id)}>Remover</button
+							>
 						</div>
 						<p>{clause.description}</p>
-						{#each clause.penalties as penalty (penalty.id)}
-							<div class="penalty surface-gray">
-								<div>
-									<strong
-										>{penalty.type === 'PERCENTAGE'
-											? `${penalty.value}%`
-											: `${penalty.value} sats`}</strong
-									>
-									<p>{penalty.description}</p>
-									{#if penalty.condition}<small>Condição: {penalty.condition}</small>{/if}
-								</div>
-								<button class="text-button" onclick={() => removePenalty(clause.id, penalty.id)}
-									>Remover</button
-								>
-							</div>
-						{/each}
-						{#if clause.kind === 'RULE' && penaltyClauseId !== clause.id}<Button
-								variant="ghost"
-								onClick={() => startPenalty(clause.id)}>Adicionar penalidade</Button
-							>{/if}
-						{#if penaltyClauseId === clause.id}
-							<div class="stack penalty-form surface-gray">
-								<label class="field"
-									><span class="label">Tipo da penalidade</span><select bind:value={penaltyType}
-										><option value="PERCENTAGE">Percentual</option><option value="FIXED_AMOUNT"
-											>Valor fixo em sats</option
-										></select
-									></label
-								>
-								<Input
-									label="Valor"
-									bind:value={penaltyValue}
-									type="number"
-									min={1}
-									max={penaltyType === 'PERCENTAGE' ? 100 : undefined}
-									step={1}
-									required
-								/>
-								<Input label="Condição (opcional)" bind:value={penaltyCondition} />
-								<Input label="Descrição" bind:value={penaltyDescription} textarea required />
-								<div class="row">
-									<Button onClick={addPenalty}>Salvar penalidade</Button><Button
-										variant="ghost"
-										onClick={() => (penaltyClauseId = '')}>Fechar</Button
-									>
-								</div>
-							</div>
-						{/if}
 					</div>
 				</Card>
 			{/each}
 			<div class="row actions">
-				<Button onClick={nextStep}>Revisar contrato</Button><Button
-					variant="ghost"
-					onClick={() => (step = 0)}>Voltar</Button
+				<Button
+					onClick={() => {
+						if (!contract?.clauses.length) {
+							error = 'Inclua ao menos uma cláusula.';
+							return;
+						}
+						error = '';
+						step = 2;
+					}}>Continuar</Button
+				><Button variant="ghost" disabled={Boolean(wallet)} onClick={() => (step = 0)}
+					>Voltar</Button
 				>
 			</div>
 		</div>
+	{:else if step === 2}
+		<Card>
+			<BitcoinPolicyStep
+				address={wallet?.address ?? ''}
+				policyHash={wallet?.policyHash ?? ''}
+				ready={Boolean(wallet)}
+				busy={saving}
+				onInitialize={initializePolicy}
+			/>
+			<div class="row actions policy-actions">
+				<Button disabled={!wallet} onClick={() => (step = 3)}>Revisar contrato</Button><Button
+					variant="ghost"
+					onClick={() => (step = 1)}>Voltar</Button
+				>
+			</div>
+		</Card>
 	{:else}
 		<Card>
 			<div class="stack">
-				<h2>{title || 'Contrato sem título'}</h2>
+				<h2>{contract?.title || 'Contrato sem título'}</h2>
 				<div class="review-grid">
-					<span>Cláusulas</span><strong>{clauses.length}</strong><span>Taxas dos árbitros</span
-					><strong>{feeA + feeB + feeNeutral}%</strong><span>Taxa da plataforma</span><strong
-						>Definida pela API</strong
-					><span>Prazo</span><strong>{formatDateTime(expiresAt)}</strong>
+					<span>Cláusulas</span><strong>{contract?.clauses.length ?? 0}</strong>
+					<span>Taxas dos árbitros</span><strong>{feeA + feeB + feeNeutral}%</strong>
+					<span>Prazo</span><strong>{formatDateTime(expiresAt)}</strong>
+					<span>Rede Bitcoin</span><strong>Testnet4</strong>
+					<span>Política</span><strong class="technical policy-hash">{wallet?.policyHash}</strong>
 				</div>
 				<div class="divider"></div>
+				<h3>Participantes</h3>
+				<div class="review-grid">
+					<span>Cônjuge A</span><strong>Você</strong>
+					<span>Cônjuge B</span><strong>{userName(spouseB)}</strong>
+					<span>Árbitro A</span><strong>{userName(arbitratorA)} · {feeA}%</strong>
+					<span>Árbitro B</span><strong>{userName(arbitratorB)} · {feeB}%</strong>
+					{#if neutral}<span>Árbitro neutro</span><strong
+							>{userName(neutral)} · {feeNeutral}%</strong
+						>{/if}
+				</div>
+				<div class="divider"></div>
+				<h3>Cláusulas e consequências</h3>
+				{#each contract?.clauses ?? [] as clause, index (clause.id)}
+					<div class="review-clause surface-gray">
+						<strong>{index + 1}. {clause.title}</strong>
+						<p>{clause.description}</p>
+						{#if clause.rule}
+							<small>
+								Efeito econômico: {clause.rule.definition.effect.amount.value}{clause.rule
+									.definition.effect.amount.type === 'PERCENTAGE'
+									? '%'
+									: ' sats'} · {clause.rule.definition.effect.from} → {clause.rule.definition.effect
+									.to}
+							</small>
+						{/if}
+					</div>
+				{/each}
 				<p>
-					Ao enviar para aceite, o conteúdo fica congelado e cada participante deverá assinar o hash
-					atual com sua identidade Nostr.
+					Ao enviar, cláusulas e política Bitcoin ficam congeladas no conteúdo que todos os
+					participantes assinarão.
 				</p>
 				<div class="row actions">
-					<Button disabled={saving} onClick={() => save(true)}
-						>{saving ? 'Salvando…' : 'Salvar e enviar para aceite'}</Button
-					><Button variant="ghost" disabled={saving} onClick={() => save(false)}
-						>Somente salvar rascunho</Button
-					><Button variant="ghost" disabled={saving} onClick={() => (step = 1)}>Voltar</Button>
+					<Button disabled={saving || !wallet} onClick={finish}
+						>{saving ? 'Enviando…' : 'Enviar para aceite'}</Button
+					><Button variant="ghost" disabled={saving} onClick={() => (step = 2)}>Voltar</Button>
 				</div>
 			</div>
 		</Card>
@@ -426,38 +559,75 @@
 	.compact {
 		gap: 0.35rem;
 	}
-	.error,
-	.notice,
-	.penalty-form {
-		padding: 1rem;
-	}
 	.error {
+		padding: 1rem;
 		color: var(--rose-text);
 		border-color: var(--rose-300);
 	}
-	.notice a {
-		color: var(--rose-text);
-		text-decoration: underline;
+	.draft-note {
+		font-size: 0.82rem;
+		overflow-wrap: anywhere;
 	}
 	.actions,
 	.clause-heading {
 		justify-content: space-between;
 	}
-	.clause-heading {
-		align-items: start;
-	}
-	.clause-heading h3 {
-		margin-top: 0.65rem;
-	}
-	.penalty {
-		padding: 0.9rem;
+	.mode-tabs {
 		display: flex;
-		justify-content: space-between;
-		gap: 1rem;
+		gap: 0.4rem;
+		padding: 0.3rem;
+		background: var(--gray-100);
+		border-radius: var(--radius-md);
+	}
+	.mode-tabs button {
+		flex: 1;
+		padding: 0.65rem;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--gray-600);
+		font-weight: 600;
+	}
+	.mode-tabs button.active {
+		background: var(--surface);
+		color: var(--rose-text);
+		box-shadow: var(--shadow-sm);
+	}
+	.clause-card {
+		gap: 0.65rem;
+	}
+	.clause-type {
+		padding: 0.2rem 0.5rem;
+		border: 1px solid var(--rose-300);
+		border-radius: var(--radius-sm);
+		color: var(--rose-text);
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+	.policy-actions {
+		margin-top: 1.5rem;
 	}
 	.review-grid {
 		display: grid;
-		grid-template-columns: 1fr auto;
-		gap: 0.75rem 1rem;
+		grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr);
+		gap: 0.8rem 1rem;
+	}
+	.policy-hash {
+		overflow-wrap: anywhere;
+	}
+	.review-clause {
+		padding: 1rem;
+	}
+	.review-clause p {
+		margin: 0.4rem 0;
+	}
+	@media (max-width: 640px) {
+		.mode-tabs,
+		.actions {
+			align-items: stretch;
+			flex-direction: column;
+		}
 	}
 </style>

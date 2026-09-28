@@ -22,6 +22,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import type { ConditionField, DecisionFacts, RuleSubject, SpouseRole } from '$lib/contract-rules';
 	import { fetchSpendRequests, publishSpendRequest, type SpendRequestPayload } from '$lib/nostr';
 	import { authStore } from '$lib/stores/auth';
 	import type { AuthSession } from '$lib/types';
@@ -38,6 +39,9 @@
 	let selectedClauseIds = $state<string[]>([]);
 	let reason = $state('');
 	let beneficiaryAddress = $state('');
+	let offendingParty = $state<SpouseRole>('SPOUSE_B');
+	let durationDays = $state(1);
+	let occurrenceCount = $state(1);
 	let rationale = $state('');
 	let networkFeeSats = $state(500);
 	let loading = $state(true);
@@ -70,6 +74,7 @@
 					])
 				)
 			);
+			if (me()?.role === 'SPOUSE_B') offendingParty = 'SPOUSE_A';
 		} catch (caught) {
 			error = message(caught);
 		} finally {
@@ -88,9 +93,48 @@
 	}
 
 	function toggleClause(id: string) {
-		selectedClauseIds = selectedClauseIds.includes(id)
-			? selectedClauseIds.filter((item) => item !== id)
-			: [...selectedClauseIds, id];
+		if (selectedClauseIds.includes(id)) {
+			selectedClauseIds = selectedClauseIds.filter((item) => item !== id);
+			return;
+		}
+		const candidate = contract?.clauses.find((clause) => clause.id === id)?.rule;
+		const currentSubject = selectedSubject();
+		if (candidate && currentSubject && candidate.definition.trigger.subject !== currentSubject) {
+			error = 'Crie decisões separadas para regras com assuntos diferentes.';
+			return;
+		}
+		error = '';
+		selectedClauseIds = [...selectedClauseIds, id];
+	}
+
+	function selectedRules() {
+		return (contract?.clauses ?? [])
+			.filter((clause) => selectedClauseIds.includes(clause.id))
+			.map((clause) => clause.rule)
+			.filter((rule) => rule !== null);
+	}
+
+	function selectedSubject(): RuleSubject | null {
+		return selectedRules()[0]?.definition.trigger.subject ?? null;
+	}
+
+	function requiredFields(): ConditionField[] {
+		return [
+			...new Set(
+				selectedRules().flatMap((rule) => rule.definition.conditions.map((item) => item.field))
+			)
+		];
+	}
+
+	function decisionFacts(): DecisionFacts {
+		return Object.fromEntries(
+			requiredFields().map((field) => [
+				field,
+				field === 'DURATION'
+					? { value: durationDays, unit: 'DAY' }
+					: { value: occurrenceCount, unit: 'COUNT' }
+			])
+		) as DecisionFacts;
 	}
 
 	async function perform(action: () => Promise<void>) {
@@ -110,10 +154,15 @@
 	async function openDecision() {
 		if (!session) return;
 		await perform(async () => {
+			const subject = selectedSubject();
+			if (!subject) throw new Error('Selecione ao menos uma regra executável.');
 			await createDecision(session!.accessToken, data.contractId, {
 				reason,
 				beneficiaryAddress,
-				clauseIds: selectedClauseIds
+				clauseIds: selectedClauseIds,
+				subject,
+				offendingParty,
+				facts: decisionFacts()
 			});
 			reason = '';
 			selectedClauseIds = [];
@@ -294,26 +343,51 @@
 				><div class="stack">
 					<h2>Abrir decisão</h2>
 					<p class="muted">
-						Selecione as cláusulas violadas. As penalidades serão calculadas sobre o saldo
-						confirmado atual.
+						Selecione as regras violadas. Os efeitos serão estimados sobre o saldo confirmado atual.
 					</p>
-					{#each contract.clauses.filter((clause) => clause.penalties.length > 0) as clause (clause.id)}
+					{#each contract.clauses.filter((clause) => clause.rule !== null) as clause (clause.id)}
 						<label class="clause"
 							><input
 								type="checkbox"
 								checked={selectedClauseIds.includes(clause.id)}
 								onchange={() => toggleClause(clause.id)}
-							/><span
-								><strong>{clause.title}</strong><small
-									>{clause.penalties
-										.map((penalty) =>
-											penalty.type === 'PERCENTAGE' ? `${penalty.value}%` : `${penalty.value} sats`
-										)
-										.join(' + ')}</small
-								></span
-							></label
+							/><span>
+								<strong>{clause.title}</strong>
+								{#if clause.rule}<small>
+										{clause.rule.definition.effect.amount.value}{clause.rule.definition.effect
+											.amount.type === 'PERCENTAGE'
+											? '%'
+											: ' sats'}
+										· {clause.rule.definition.trigger.subject}
+									</small>{/if}
+							</span></label
 						>
 					{/each}
+					<label class="field">
+						<span class="label">Parte que descumpriu</span>
+						<select bind:value={offendingParty}>
+							<option value="SPOUSE_A">Cônjuge A</option>
+							<option value="SPOUSE_B">Cônjuge B</option>
+						</select>
+					</label>
+					{#if requiredFields().includes('DURATION')}
+						<Input
+							label="Duração comprovada (dias)"
+							bind:value={durationDays}
+							type="number"
+							min={1}
+							step={1}
+						/>
+					{/if}
+					{#if requiredFields().includes('OCCURRENCE_COUNT')}
+						<Input
+							label="Ocorrências comprovadas"
+							bind:value={occurrenceCount}
+							type="number"
+							min={1}
+							step={1}
+						/>
+					{/if}
 					<Input label="Motivo e evidências" bind:value={reason} textarea />
 					<Input label="Endereço Testnet4 beneficiário" bind:value={beneficiaryAddress} />
 					<Button
@@ -336,9 +410,15 @@
 					</div>
 					<p>{decision.reason}</p>
 					<p>
-						<strong>{decision.totalPenaltySats.toLocaleString('pt-BR')} sats</strong> sobre base de {decision.calculationBaseSats.toLocaleString(
-							'pt-BR'
-						)} sats
+						<strong
+							>{(decision.status === 'AWAITING_SPOUSE' || decision.status === 'ARBITRATION'
+								? decision.estimatedPenaltySats
+								: decision.totalPenaltySats
+							).toLocaleString('pt-BR')} sats</strong
+						>
+						{decision.status === 'AWAITING_SPOUSE' || decision.status === 'ARBITRATION'
+							? ' estimados'
+							: ' aprovados'} sobre base de {decision.calculationBaseSats.toLocaleString('pt-BR')} sats
 					</p>
 					{#each decision.clauses as clause (clause.id)}<p class="muted">
 							Cláusula: {contract.clauses.find((item) => item.id === clause.clauseId)?.title} — {clause.calculatedPenaltySats.toLocaleString(
