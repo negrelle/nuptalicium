@@ -25,6 +25,7 @@
 	import type { ConditionField, DecisionFacts, RuleSubject, SpouseRole } from '$lib/contract-rules';
 	import { fetchSpendRequests, publishSpendRequest, type SpendRequestPayload } from '$lib/nostr';
 	import { authStore } from '$lib/stores/auth';
+	import { showValidationToast } from '$lib/stores/toast';
 	import type { AuthSession } from '$lib/types';
 	import { address, networks, Psbt } from 'bitcoinjs-lib';
 	import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371';
@@ -100,7 +101,7 @@
 		const candidate = contract?.clauses.find((clause) => clause.id === id)?.rule;
 		const currentSubject = selectedSubject();
 		if (candidate && currentSubject && candidate.definition.trigger.subject !== currentSubject) {
-			error = 'Crie decisões separadas para regras com assuntos diferentes.';
+			showValidationToast('Crie decisões separadas para regras com assuntos diferentes.');
 			return;
 		}
 		error = '';
@@ -153,9 +154,12 @@
 
 	async function openDecision() {
 		if (!session) return;
+		const subject = selectedSubject();
+		if (!subject) {
+			showValidationToast('Selecione ao menos uma regra executável.');
+			return;
+		}
 		await perform(async () => {
-			const subject = selectedSubject();
-			if (!subject) throw new Error('Selecione ao menos uma regra executável.');
 			await createDecision(session!.accessToken, data.contractId, {
 				reason,
 				beneficiaryAddress,
@@ -471,7 +475,7 @@
 		color: var(--rose-text);
 	}
 	.success {
-		color: #386641;
+		color: var(--success);
 	}
 	.clause {
 		display: flex;

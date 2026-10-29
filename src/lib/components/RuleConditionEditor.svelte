@@ -1,13 +1,16 @@
 <script lang="ts">
+	import { RULE_OPERATOR_LABELS } from '$lib/contract-rules';
 	import type { RuleCondition, RuleOperator, RuleSchema } from '$lib/contract-rules';
 
 	let {
 		condition = $bindable(),
 		fieldSchema,
+		readonly = false,
 		onRemove
 	}: {
 		condition: RuleCondition;
 		fieldSchema: RuleSchema['triggers'][number]['subjects'][number]['fields'][number];
+		readonly?: boolean;
 		onRemove: () => void;
 	} = $props();
 
@@ -26,21 +29,29 @@
 	</label>
 	<label class="field">
 		<span class="label">Operador</span>
-		<select value={condition.operator} onchange={setOperator}>
+		<select value={condition.operator} onchange={setOperator} disabled={readonly}>
 			{#each fieldSchema.operators as operator (operator)}
-				<option value={operator}>{operator}</option>
+				<option value={operator}>{RULE_OPERATOR_LABELS[operator]}</option>
 			{/each}
 		</select>
 	</label>
 	<label class="field">
 		<span class="label">Valor</span>
-		<input class="control" type="number" min="1" step="1" bind:value={condition.value} />
+		<input
+			class="control"
+			type="number"
+			min="1"
+			step="1"
+			bind:value={condition.value}
+			disabled={readonly}
+		/>
 	</label>
 	<label class="field">
 		<span class="label">Unidade</span>
 		<input class="control" value={condition.unit === 'DAY' ? 'dias' : 'ocorrências'} readonly />
 	</label>
-	<button type="button" class="text-button remove" onclick={onRemove}>Remover</button>
+	{#if !readonly}<button type="button" class="text-button remove" onclick={onRemove}>Remover</button
+		>{/if}
 </div>
 
 <style>

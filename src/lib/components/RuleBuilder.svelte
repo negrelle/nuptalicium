@@ -9,8 +9,11 @@
 	import RuleConditionEditor from './RuleConditionEditor.svelte';
 	import RuleEffectEditor from './RuleEffectEditor.svelte';
 
-	let { value = $bindable(), schema }: { value: ContractRulePayload; schema: RuleSchema } =
-		$props();
+	let {
+		value = $bindable(),
+		schema,
+		readonly = false
+	}: { value: ContractRulePayload; schema: RuleSchema; readonly?: boolean } = $props();
 
 	let triggerSchema = $derived(schema.triggers[0]);
 	let subjectSchema = $derived(
@@ -77,7 +80,7 @@
 		</label>
 		<label class="field">
 			<span class="label">Sobre</span>
-			<select value={value.definition.trigger.subject} onchange={changeSubject}>
+			<select value={value.definition.trigger.subject} onchange={changeSubject} disabled={readonly}>
 				{#each triggerSchema.subjects as subject (subject.value)}
 					<option value={subject.value}>{subject.label}</option>
 				{/each}
@@ -91,7 +94,7 @@
 			<button
 				type="button"
 				class="text-button"
-				disabled={value.definition.conditions.length >= subjectSchema.fields.length}
+				disabled={readonly || value.definition.conditions.length >= subjectSchema.fields.length}
 				onclick={addCondition}>Adicionar condição</button
 			>
 		</div>
@@ -99,6 +102,7 @@
 			<RuleConditionEditor
 				bind:condition={value.definition.conditions[index]}
 				fieldSchema={fieldSchema(condition.field)}
+				{readonly}
 				onRemove={() => removeCondition(index)}
 			/>
 		{/each}
@@ -106,7 +110,7 @@
 
 	<div class="stack">
 		<h3>Então</h3>
-		<RuleEffectEditor bind:effect={value.definition.effect} schema={schema.effects[0]} />
+		<RuleEffectEditor bind:effect={value.definition.effect} schema={schema.effects[0]} {readonly} />
 	</div>
 </div>
 
@@ -116,8 +120,5 @@
 	}
 	.heading {
 		justify-content: space-between;
-	}
-	.heading h3 {
-		font-size: 1rem;
 	}
 </style>

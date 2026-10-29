@@ -4,6 +4,7 @@
 		acceptContract,
 		cancelContract,
 		createClause,
+		createCustomRuleClause,
 		deleteClause,
 		getContract,
 		getMultisig,
@@ -32,9 +33,16 @@
 	import RulePreview from '$lib/components/RulePreview.svelte';
 	import UserPicker from '$lib/components/UserPicker.svelte';
 	import { formatDateTime } from '$lib/date';
-	import { cloneRule, type ContractRulePayload, type RuleSchema } from '$lib/contract-rules';
+	import {
+		cloneRule,
+		DEFAULT_RULE,
+		type ContractRulePayload,
+		type RuleSchema
+	} from '$lib/contract-rules';
 	import { pubkeyToNpub, signContractAcceptance } from '$lib/nostr';
+	import { confirmAlert } from '$lib/stores/alert';
 	import { authStore } from '$lib/stores/auth';
+	import { showValidationToast } from '$lib/stores/toast';
 	import type { AuthSession } from '$lib/types';
 	import { faAngleLeft, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 	import { FontAwesomeIcon } from '@fortawesome/svelte-fontawesome';
@@ -67,6 +75,7 @@
 	let feeB = $state(0);
 	let feeNeutral = $state(0);
 	let expiresAt = $state('');
+	let clauseEditorOpen = $state(false);
 	let editingClauseId = $state('');
 	let clauseTitle = $state('');
 	let clauseKind = $state<ClauseKind>('CONCEPT');
@@ -163,11 +172,11 @@
 	async function saveDetails() {
 		if (!contract || !session) return;
 		if (!spouseB || !arbitratorA || !arbitratorB) {
-			error = 'Selecione o outro cônjuge e os dois árbitros obrigatórios.';
+			showValidationToast('Selecione o outro cônjuge e os dois árbitros obrigatórios.');
 			return;
 		}
-		if ((neutral && feeNeutral <= 0) || (!neutral && feeNeutral > 0)) {
-			error = 'O árbitro neutro e sua taxa devem ser informados juntos.';
+		if (!neutral && feeNeutral > 0) {
+			showValidationToast('Informe o árbitro neutro ou remova a taxa dele.');
 			return;
 		}
 		await perform(async () => {
@@ -188,22 +197,45 @@
 	}
 
 	function resetClauseForm() {
+		clauseEditorOpen = false;
 		editingClauseId = '';
 		clauseTitle = '';
 		clauseKind = 'CONCEPT';
 		clauseDescription = '';
+		ruleValue = null;
+		rulePreview = null;
+	}
+
+	async function beginClauseCreation() {
+		if (!session) return;
+		resetClauseForm();
+		editingRuleClauseId = '';
+		clauseKind = 'RULE';
+		ruleValue = cloneRule(DEFAULT_RULE);
+		clauseEditorOpen = true;
+		error = '';
+		try {
+			ruleSchema ??= await getRuleSchema(session.accessToken);
+		} catch (caught) {
+			resetClauseForm();
+			error = messageOf(caught, 'Não foi possível abrir o editor de regras.');
+		}
 	}
 
 	function editClause(clause: ContractClause) {
+		editingRuleClauseId = '';
+		ruleValue = null;
+		rulePreview = null;
 		editingClauseId = clause.id;
 		clauseTitle = clause.title;
 		clauseKind = clause.kind;
 		clauseDescription = clause.description;
+		clauseEditorOpen = true;
 	}
 
 	async function saveClause() {
 		if (!contract || !session || !clauseTitle.trim() || !clauseDescription.trim()) {
-			error = 'Informe título e descrição da cláusula.';
+			showValidationToast('Informe título e descrição da cláusula.');
 			return;
 		}
 		await perform(async () => {
@@ -224,8 +256,27 @@
 		});
 	}
 
+	async function saveNewRule() {
+		if (!contract || !session || !ruleValue) return;
+		if (!clauseTitle.trim()) {
+			showValidationToast('Informe o título da regra.');
+			return;
+		}
+		await perform(async () => {
+			await createCustomRuleClause(session!.accessToken, contract!.id, {
+				title: clauseTitle.trim(),
+				position: contract!.clauses.length,
+				rule: ruleValue!
+			});
+			resetClauseForm();
+			await refresh();
+			success = 'Regra adicionada.';
+		});
+	}
+
 	async function beginRuleEdit(clause: ContractClause) {
 		if (!session || !clause.rule) return;
+		resetClauseForm();
 		error = '';
 		try {
 			ruleSchema ??= await getRuleSchema(session.accessToken);
@@ -240,15 +291,21 @@
 		}
 	}
 
-	async function previewEditedRule() {
-		if (!session || !contract || !ruleValue || !editingRuleClauseId) return;
-		const clause = contract.clauses.find((item) => item.id === editingRuleClauseId);
-		if (!clause) return;
+	async function previewCurrentRule() {
+		if (!session || !contract || !ruleValue) return;
+		const title = editingRuleClauseId
+			? contract.clauses.find((item) => item.id === editingRuleClauseId)?.title
+			: clauseTitle.trim();
+		if (!title) {
+			showValidationToast('Informe o título da regra.');
+			return;
+		}
 		previewingRule = true;
+		error = '';
 		try {
-			const preview = await previewRule(session.accessToken, clause.title, ruleValue);
+			const preview = await previewRule(session.accessToken, title, ruleValue);
 			rulePreview = preview.description;
-			if (!preview.valid) error = preview.errors.map((item) => item.message).join(' ');
+			if (!preview.valid) showValidationToast(preview.errors.map((item) => item.message).join(' '));
 		} catch (caught) {
 			error = messageOf(caught, 'Não foi possível gerar a prévia.');
 		} finally {
@@ -269,7 +326,16 @@
 	}
 
 	async function removeClause(clauseId: string) {
-		if (!confirm('Remover esta cláusula?')) return;
+		if (
+			!(await confirmAlert({
+				title: 'Remover cláusula?',
+				message: 'A cláusula será removida deste contrato.',
+				variant: 'danger',
+				confirmLabel: 'Remover',
+				cancelLabel: 'Cancelar'
+			}))
+		)
+			return;
 		await perform(async () => {
 			await deleteClause(session!.accessToken, contract!.id, clauseId);
 			await refresh();
@@ -278,7 +344,15 @@
 	}
 
 	async function submitForAcceptance() {
-		if (!confirm('Enviar o contrato para aceite? O conteúdo não poderá mais ser editado.')) return;
+		if (
+			!(await confirmAlert({
+				title: 'Enviar para aceite?',
+				message: 'O conteúdo do contrato não poderá mais ser editado após o envio.',
+				confirmLabel: 'Enviar para aceite',
+				cancelLabel: 'Voltar'
+			}))
+		)
+			return;
 		await perform(async () => {
 			const { generated, policy } = await generateExpectedPolicy();
 			wallet = await initializeMultisig(session!.accessToken, contract!.id, {
@@ -350,7 +424,16 @@
 	}
 
 	async function cancel() {
-		if (!confirm('Cancelar este contrato? Essa ação não pode ser desfeita.')) return;
+		if (
+			!(await confirmAlert({
+				title: 'Cancelar contrato?',
+				message: 'Essa ação não pode ser desfeita.',
+				variant: 'danger',
+				confirmLabel: 'Cancelar contrato',
+				cancelLabel: 'Voltar'
+			}))
+		)
+			return;
 		await perform(async () => {
 			contract = await cancelContract(session!.accessToken, contract!.id);
 			success = 'Contrato cancelado.';
@@ -508,8 +591,19 @@
 		<section class="stack">
 			<div class="row heading">
 				<h2>Cláusulas</h2>
-				<span class="muted">{contract.clauses.length} item(ns)</span>
+				<div class="row">
+					<span class="muted">{contract.clauses.length} item(ns)</span>
+					{#if contract.status === 'DRAFT' && isSpouse() && !clauseEditorOpen && !editingRuleClauseId}
+						<Button href="/clauses" variant="ghost">Usar da biblioteca</Button>
+						<Button variant="secondary" onClick={() => void beginClauseCreation()}
+							>Adicionar cláusula</Button
+						>
+					{/if}
+				</div>
 			</div>
+			{#if contract.clauses.length === 0 && !clauseEditorOpen}
+				<p class="muted">Nenhuma cláusula adicionada.</p>
+			{/if}
 			{#each contract.clauses as clause, index (clause.id)}
 				<Card>
 					<div class="stack">
@@ -553,7 +647,7 @@
 					<div class="stack">
 						<h3>Editar regra estruturada</h3>
 						<RuleBuilder bind:value={ruleValue} schema={ruleSchema} />
-						<Button variant="secondary" disabled={previewingRule} onClick={previewEditedRule}
+						<Button variant="secondary" disabled={previewingRule} onClick={previewCurrentRule}
 							>Gerar prévia</Button
 						>
 						<RulePreview description={rulePreview} loading={previewingRule} />
@@ -571,20 +665,64 @@
 					</div>
 				</Card>
 			{/if}
-			{#if contract.status === 'DRAFT' && isSpouse()}
+			{#if contract.status === 'DRAFT' && isSpouse() && clauseEditorOpen}
 				<Card
 					><div class="stack">
-						<h3>{editingClauseId ? 'Editar cláusula' : 'Nova cláusula'}</h3>
-						<Input label="Título" bind:value={clauseTitle} />
-						<input type="hidden" bind:value={clauseKind} />
-						<Input label="Descrição do conceito" bind:value={clauseDescription} textarea />
-						<div class="row">
-							<Button disabled={busy} onClick={saveClause}
-								>{editingClauseId ? 'Atualizar' : 'Adicionar'}</Button
-							>{#if editingClauseId}<Button variant="ghost" onClick={resetClauseForm}
-									>Cancelar edição</Button
-								>{/if}
-						</div>
+						{#if editingClauseId}
+							<h3>Editar cláusula</h3>
+							<Input label="Título" bind:value={clauseTitle} />
+							<input type="hidden" bind:value={clauseKind} />
+							<Input label="Descrição do conceito" bind:value={clauseDescription} textarea />
+							<div class="row">
+								<Button disabled={busy} onClick={saveClause}>Atualizar</Button>
+								<Button variant="ghost" onClick={resetClauseForm}>Cancelar</Button>
+							</div>
+						{:else}
+							<h3>Nova cláusula</h3>
+							<div class="mode-tabs" role="tablist" aria-label="Tipo da cláusula">
+								{#each [['RULE', 'Criar regra'], ['CONCEPT', 'Conceito']] as option (option[0])}
+									<button
+										type="button"
+										class:active={clauseKind === option[0]}
+										onclick={() => {
+											clauseKind = option[0] as ClauseKind;
+											rulePreview = null;
+										}}>{option[1]}</button
+									>
+								{/each}
+							</div>
+							{#if clauseKind === 'RULE'}
+								<Input label="Título da regra" bind:value={clauseTitle} required />
+								{#if ruleSchema && ruleValue}
+									<RuleBuilder bind:value={ruleValue} schema={ruleSchema} />
+									<Button variant="secondary" disabled={previewingRule} onClick={previewCurrentRule}
+										>Gerar prévia</Button
+									>
+									<RulePreview description={rulePreview} loading={previewingRule} />
+								{:else}
+									<p class="muted">Carregando editor de regras…</p>
+								{/if}
+							{:else}
+								<Input label="Título do conceito" bind:value={clauseTitle} required />
+								<Input
+									label="Descrição"
+									bind:value={clauseDescription}
+									textarea
+									rows={5}
+									required
+								/>
+							{/if}
+							{#if clauseKind === 'CONCEPT' || (ruleSchema && ruleValue)}
+								<div class="row">
+									<Button disabled={busy} onClick={clauseKind === 'RULE' ? saveNewRule : saveClause}
+										>{busy ? 'Adicionando…' : 'Adicionar ao contrato'}</Button
+									>
+									<Button variant="ghost" onClick={resetClauseForm}>Cancelar</Button>
+								</div>
+							{:else}
+								<Button variant="ghost" onClick={resetClauseForm}>Cancelar</Button>
+							{/if}
+						{/if}
 					</div></Card
 				>
 			{/if}
@@ -717,8 +855,8 @@
 		color: var(--rose-text);
 	}
 	.success {
-		color: #386641;
-		border-color: rgba(56, 102, 65, 0.3);
+		color: var(--success);
+		border-color: color-mix(in srgb, var(--success) 30%, transparent);
 	}
 	.participants {
 		display: grid;
@@ -743,7 +881,7 @@
 		color: var(--gray-500);
 	}
 	.acceptance.accepted {
-		color: #386641;
+		color: var(--success);
 	}
 	.fees {
 		display: flex;
@@ -784,5 +922,26 @@
 		flex-wrap: wrap;
 		gap: 0.5rem 1.5rem;
 		padding: 0.85rem;
+	}
+	.mode-tabs {
+		display: flex;
+		gap: 0.4rem;
+		padding: 0.3rem;
+		background: var(--gray-100);
+		border-radius: var(--radius-md);
+	}
+	.mode-tabs button {
+		flex: 1;
+		padding: 0.65rem;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--gray-600);
+		font-weight: 600;
+	}
+	.mode-tabs button.active {
+		background: var(--surface);
+		color: var(--rose-text);
+		box-shadow: var(--shadow-sm);
 	}
 </style>

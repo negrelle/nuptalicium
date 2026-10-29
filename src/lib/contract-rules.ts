@@ -9,10 +9,30 @@ export type RuleOperator =
 	| 'GREATER_OR_EQUAL'
 	| 'LESS_THAN'
 	| 'LESS_OR_EQUAL';
+
+export const RULE_OPERATOR_LABELS: Record<RuleOperator, string> = {
+	EQUAL: 'Igual a (=)',
+	NOT_EQUAL: 'Diferente de (≠)',
+	GREATER_THAN: 'Maior que (>)',
+	GREATER_OR_EQUAL: 'Maior ou igual a (≥)',
+	LESS_THAN: 'Menor que (<)',
+	LESS_OR_EQUAL: 'Menor ou igual a (≤)'
+};
 export type EffectType = 'TRANSFER_COLLATERAL';
 export type AmountType = 'SATS' | 'PERCENTAGE';
 export type PartyReference = 'SPOUSE_A' | 'SPOUSE_B' | 'OFFENDING_PARTY' | 'OTHER_SPOUSE';
 export type SpouseRole = 'SPOUSE_A' | 'SPOUSE_B';
+
+export const PARTY_REFERENCE_LABELS: Record<PartyReference, string> = {
+	SPOUSE_A: 'Cônjuge A',
+	SPOUSE_B: 'Cônjuge B',
+	OFFENDING_PARTY: 'Parte que descumpriu',
+	OTHER_SPOUSE: 'Outro cônjuge'
+};
+
+export function partyReferenceLabel(party: PartyReference): string {
+	return PARTY_REFERENCE_LABELS[party];
+}
 
 export interface RuleTrigger {
 	type: TriggerType;
@@ -51,7 +71,6 @@ export interface ContractRulePayload {
 
 export interface ContractRule extends ContractRulePayload {
 	id: string;
-	sourceTemplateId: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -115,5 +134,5 @@ export const DEFAULT_RULE: ContractRulePayload = {
 };
 
 export function cloneRule(rule: ContractRulePayload = DEFAULT_RULE): ContractRulePayload {
-	return structuredClone(rule);
+	return JSON.parse(JSON.stringify(rule)) as ContractRulePayload;
 }
