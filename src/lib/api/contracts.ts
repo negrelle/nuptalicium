@@ -71,6 +71,18 @@ export interface Contract {
 	acceptances: ContractAcceptance[];
 }
 
+export interface ContractDiagnostic {
+	severity: 'ERROR' | 'WARNING' | 'INFO';
+	code: string;
+	message: string;
+	clauseId: string | null;
+}
+
+export interface ContractDiagnostics {
+	readyForSubmission: boolean;
+	diagnostics: ContractDiagnostic[];
+}
+
 export interface ContractPayload {
 	title: string | null;
 	spouseBPublicKey: string;
@@ -187,6 +199,10 @@ export function listContracts(
 
 export function getContract(accessToken: string, contractId: string) {
 	return apiRequest<Contract>(`/contracts/${contractId}`, {}, accessToken);
+}
+
+export function getContractDiagnostics(accessToken: string, contractId: string) {
+	return apiRequest<ContractDiagnostics>(`/contracts/${contractId}/diagnostics`, {}, accessToken);
 }
 
 export function createContract(accessToken: string, payload: ContractPayload) {
