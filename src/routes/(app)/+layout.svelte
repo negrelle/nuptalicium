@@ -1,24 +1,40 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import Arabesque from '$lib/components/Arabesque.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import NpubDisplay from '$lib/components/NpubDisplay.svelte';
-	import { authStore, logout, restoreSession } from '$lib/stores/auth';
+	import { authStore, logout, refreshSessionIfNeeded, restoreSession } from '$lib/stores/auth';
 	import { identityStore } from '$lib/stores/identity';
-	import type { AuthSession } from '$lib/types';
-	import type { Identity } from '$lib/types';
+	import { themeStore, toggleTheme } from '$lib/stores/theme';
+	import type { AuthSession, Identity } from '$lib/types';
 	import { onMount } from 'svelte';
 
 	let { children } = $props();
 	let identity = $state<Identity | null>(null);
 	let session = $state<AuthSession | null>(null);
 	let checkingSession = $state(true);
+	let displayName = $derived(session?.user.displayName?.trim());
 
 	onMount(() => {
 		const unsubscribeIdentity = identityStore.subscribe((value) => {
 			identity = value;
 		});
-		const unsubscribeAuth = authStore.subscribe((value) => (session = value));
+		const unsubscribeAuth = authStore.subscribe((value) => {
+			session = value;
+			if (!checkingSession && !value) goto(resolve('/'));
+		});
+		const handleVisibilityChange = () => {
+			if (document.visibilityState !== 'visible') return;
+			void refreshSessionIfNeeded()
+				.then((authenticated) => {
+					if (!authenticated) goto(resolve('/'));
+				})
+				.catch(() => {
+					// A temporary network failure must not discard a locally valid session.
+				});
+		};
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 
 		void restoreSession().then((authenticated) => {
 			checkingSession = false;
@@ -26,6 +42,7 @@
 		});
 
 		return () => {
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			unsubscribeIdentity();
 			unsubscribeAuth();
 		};
@@ -52,14 +69,31 @@
 			<nav class="primary-nav" aria-label="Navegação principal">
 				<a href={resolve('/contracts')}>Contratos</a>
 				<a href={resolve('/new')}>Novo contrato</a>
+				<a href={resolve('/clauses')}>Cláusulas</a>
 			</nav>
 
 			<div class="topbar-actions">
-				{#if identity?.npub}
-					<NpubDisplay value={identity.npub} />
-				{/if}
+				<button
+					class="theme-toggle"
+					type="button"
+					onclick={toggleTheme}
+					aria-label={$themeStore === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+					title={$themeStore === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+				>
+					{$themeStore === 'dark' ? '☀' : '☾'}
+				</button>
+				<a class="profile-link" href={resolve('/profile')} aria-label="Abrir perfil">
+					{#if displayName}
+						<span class="pill" title={displayName}>{displayName}</span>
+					{:else if identity?.npub}
+						<NpubDisplay value={identity.npub} />
+					{/if}
+				</a>
 				<Button variant="ghost" onClick={signOut}>Sair</Button>
 			</div>
+		</div>
+		<div class="header-ornament" aria-hidden="true">
+			<Arabesque variant="divider" />
 		</div>
 	</header>
 
@@ -71,9 +105,18 @@
 		position: sticky;
 		z-index: 20;
 		top: 0;
-		background: rgba(251, 243, 243, 0.9);
+		background: var(--topbar-bg);
 		border-bottom: 1px solid var(--border);
 		backdrop-filter: blur(14px);
+	}
+
+	.header-ornament {
+		position: absolute;
+		bottom: -1rem;
+		left: 50%;
+		opacity: 0.72;
+		pointer-events: none;
+		transform: translateX(-50%);
 	}
 
 	.topbar-inner {
@@ -135,6 +178,40 @@
 		align-items: center;
 		gap: 0.75rem;
 		flex-wrap: wrap;
+	}
+
+	.theme-toggle {
+		display: grid;
+		width: 2.4rem;
+		height: 2.4rem;
+		place-items: center;
+		padding: 0;
+		border: 1px solid var(--border-gray);
+		border-radius: var(--radius-md);
+		background: var(--surface);
+		color: var(--rose-text);
+		font-size: 1.1rem;
+		line-height: 1;
+	}
+
+	.theme-toggle:hover {
+		border-color: var(--rose-300);
+		background: var(--rose-100);
+	}
+
+	.profile-link {
+		display: inline-flex;
+		border-radius: var(--radius-md);
+	}
+
+	.profile-link :global(.pill) {
+		border-radius: var(--radius-md);
+	}
+
+	.profile-link:hover :global(.pill) {
+		border-color: var(--rose-300);
+		background: var(--rose-100);
+		color: var(--rose-text);
 	}
 
 	@media (max-width: 760px) {

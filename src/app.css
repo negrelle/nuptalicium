@@ -12,7 +12,9 @@
 	--gray-100: #e2e2e8;
 	--gray-300: #aeaebb;
 	--gray-500: #6c6d7d;
+	--gray-600: #535464;
 	--gray-700: #3d3e50;
+	--gray-800: #2b2c3b;
 	--gray-900: #1c1c28;
 	--surface: #fffdfd;
 	--surface-muted: rgba(255, 253, 253, 0.62);
@@ -20,6 +22,35 @@
 	--border-gray: rgba(73, 73, 96, 0.2);
 	--focus-ring: rgba(184, 112, 112, 0.22);
 	--success: #386641;
+	--success-bg: #d9f2e2;
+	--success-text: #257040;
+	--warning: #8a651a;
+	--danger: #8e4545;
+	--danger-bg: #f5e7e7;
+	--danger-border: #e4bebe;
+	--rating: #c18a21;
+	--topbar-bg: rgba(251, 243, 243, 0.9);
+	--overlay: rgba(45, 31, 31, 0.42);
+	--primary-shadow: rgba(124, 67, 67, 0.14);
+	--page-glow: rgba(228, 188, 188, 0.24);
+	--status-draft-border: #d6d6df;
+	--status-draft-bg: #eeeef2;
+	--status-draft-text: #555665;
+	--status-pending-border: #e5c9c9;
+	--status-pending-bg: #f7eaea;
+	--status-pending-text: #875050;
+	--status-funding-border: #e2d3b8;
+	--status-funding-bg: #f5efe4;
+	--status-funding-text: #765e3d;
+	--status-active-border: #c8dccb;
+	--status-active-bg: #eaf2eb;
+	--status-active-text: #386641;
+	--status-closed-border: #c9d5dd;
+	--status-closed-bg: #e9eef2;
+	--status-closed-text: #49616e;
+	--status-expired-border: #d7c8da;
+	--status-expired-bg: #eee8ef;
+	--status-expired-text: #6f5574;
 	--shadow-card: 0 1px 2px rgba(63, 38, 38, 0.04), 0 12px 32px rgba(63, 38, 38, 0.045);
 	--font-ui: 'Source Sans 3', 'Segoe UI', sans-serif;
 	--font-display: 'Spectral', Georgia, serif;
@@ -30,9 +61,68 @@
 	--control-height: 3rem;
 }
 
+:root[data-theme='dark'] {
+	--rose-bg: #19171a;
+	--rose-100: #2b2328;
+	--rose-200: #3b2d34;
+	--rose-300: #6b4c58;
+	--rose-400: #b87b8d;
+	--rose-500: #ce94a4;
+	--rose-text: #f2d9df;
+	--gray-bg: #211e22;
+	--gray-100: #302b31;
+	--gray-300: #716a73;
+	--gray-500: #b6aeb8;
+	--gray-600: #cbc3cc;
+	--gray-700: #dfd7e0;
+	--gray-800: #eee7ef;
+	--gray-900: #fbf6fb;
+	--surface: #242025;
+	--surface-muted: rgba(46, 40, 47, 0.72);
+	--border: rgba(210, 163, 177, 0.25);
+	--border-gray: rgba(222, 215, 225, 0.2);
+	--focus-ring: rgba(206, 148, 164, 0.3);
+	--success: #80c79d;
+	--success-bg: #1f3a2c;
+	--success-text: #91d7ac;
+	--warning: #e0b867;
+	--danger: #ef9d9d;
+	--danger-bg: #41282d;
+	--danger-border: #7b4a52;
+	--rating: #efc35b;
+	--topbar-bg: rgba(25, 23, 26, 0.9);
+	--overlay: rgba(0, 0, 0, 0.58);
+	--primary-shadow: rgba(0, 0, 0, 0.28);
+	--page-glow: rgba(107, 76, 88, 0.22);
+	--status-draft-border: #59545d;
+	--status-draft-bg: #302d33;
+	--status-draft-text: #d2ccd5;
+	--status-pending-border: #734c57;
+	--status-pending-bg: #3b272e;
+	--status-pending-text: #f0b9c5;
+	--status-funding-border: #6d5b37;
+	--status-funding-bg: #39301f;
+	--status-funding-text: #e7cb8e;
+	--status-active-border: #416b51;
+	--status-active-bg: #203529;
+	--status-active-text: #91d7ac;
+	--status-closed-border: #49616e;
+	--status-closed-bg: #27343d;
+	--status-closed-text: #afc9d8;
+	--status-expired-border: #68516c;
+	--status-expired-bg: #352c38;
+	--status-expired-text: #d5bad8;
+	--shadow-card: 0 1px 2px rgba(0, 0, 0, 0.24), 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
 html {
 	font-size: 17px;
 	scroll-behavior: smooth;
+	color-scheme: light;
+}
+
+html[data-theme='dark'] {
+	color-scheme: dark;
 }
 
 body {
@@ -40,8 +130,7 @@ body {
 	min-width: 320px;
 	min-height: 100vh;
 	background:
-		radial-gradient(circle at top left, rgba(228, 188, 188, 0.24), transparent 34rem),
-		var(--rose-bg);
+		radial-gradient(circle at top left, var(--page-glow), transparent 34rem), var(--rose-bg);
 	color: var(--gray-700);
 	font-family: var(--font-ui);
 	font-weight: 400;
@@ -271,7 +360,7 @@ select:hover {
 .control:focus,
 select:focus {
 	border-color: var(--rose-400);
-	background: white;
+	background: var(--surface);
 	box-shadow: 0 0 0 3px var(--focus-ring);
 }
 

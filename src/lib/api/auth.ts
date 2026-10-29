@@ -39,6 +39,10 @@ export function getAuthenticatedUser(accessToken: string) {
 	return apiRequest<AuthUser>('/auth/me', {}, accessToken);
 }
 
-export function revokeSession(accessToken: string) {
-	return apiRequest<void>('/auth/logout', { method: 'POST' }, accessToken);
+export function refreshAuthentication() {
+	return apiRequest<AuthSession>('/auth/refresh', { method: 'POST' });
+}
+
+export function revokeSession() {
+	return apiRequest<void>('/auth/logout', { method: 'POST' });
 }

@@ -4,14 +4,20 @@ import {
 	ApiError,
 	createChallenge,
 	getAuthenticatedUser,
+	refreshAuthentication,
 	register,
 	revokeSession,
 	verifyChallenge
 } from '$lib/api/auth';
 import { AUTH_SESSION_STORAGE_KEY } from '$lib/config';
+import { configureAuthLifecycle } from '$lib/api/client';
 import { signAuthenticationChallenge } from '$lib/nostr';
-import { clearIdentity, connectWithNip07 } from '$lib/stores/identity';
-import type { AuthSession } from '$lib/types';
+import { clearIdentity, connectWithNip07, getIdentitySnapshot } from '$lib/stores/identity';
+import { showValidationToast } from '$lib/stores/toast';
+import type { AuthSession, AuthUser } from '$lib/types';
+
+const REFRESH_THRESHOLD_MS = 60_000;
+let refreshInFlight: Promise<AuthSession | null> | null = null;
 
 function readSession(): AuthSession | null {
 	if (!browser) return null;
@@ -39,6 +45,10 @@ if (browser) {
 		if (value) localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(value));
 		else localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
 	});
+	window.addEventListener('storage', (event) => {
+		if (event.key !== AUTH_SESSION_STORAGE_KEY) return;
+		authSession.set(readSession());
+	});
 }
 
 export const authStore = {
@@ -47,6 +57,58 @@ export const authStore = {
 
 export function getAuthSnapshot() {
 	return get(authSession);
+}
+
+export function updateAuthenticatedUser(user: AuthUser) {
+	authSession.update((session) => (session ? { ...session, user } : session));
+}
+
+function clearAuthentication() {
+	authSession.set(null);
+	clearIdentity();
+}
+
+function expiresSoon(session: AuthSession) {
+	return Date.parse(session.expiresAt) - Date.now() <= REFRESH_THRESHOLD_MS;
+}
+
+export async function refreshSession(): Promise<AuthSession | null> {
+	if (refreshInFlight) return refreshInFlight;
+
+	refreshInFlight = (async () => {
+		const shouldNotifyExpiration = Boolean(getAuthSnapshot() || getIdentitySnapshot());
+		try {
+			const session = await refreshAuthentication();
+			authSession.set(session);
+			return session;
+		} catch (error) {
+			if (error instanceof ApiError && error.status === 401) {
+				clearAuthentication();
+				if (shouldNotifyExpiration) {
+					showValidationToast('Sua sessão expirou. Conecte novamente com sua identidade Nostr.');
+				}
+				return null;
+			}
+			throw error;
+		} finally {
+			refreshInFlight = null;
+		}
+	})();
+
+	return refreshInFlight;
+}
+
+async function getValidAccessToken(forceRefresh: boolean, rejectedToken?: string) {
+	const current = getAuthSnapshot();
+	if (
+		current &&
+		(!forceRefresh || (rejectedToken && current.accessToken !== rejectedToken)) &&
+		!expiresSoon(current)
+	) {
+		return current.accessToken;
+	}
+
+	return (await refreshSession())?.accessToken ?? null;
 }
 
 export async function loginWithNip07() {
@@ -73,27 +135,44 @@ export async function loginWithNip07() {
 
 export async function restoreSession() {
 	const session = getAuthSnapshot();
-	if (!session) return false;
+	if (!session) {
+		try {
+			return Boolean(await refreshSession());
+		} catch {
+			return false;
+		}
+	}
 
 	try {
 		const user = await getAuthenticatedUser(session.accessToken);
 		authSession.set({ ...session, user });
 		return true;
-	} catch {
-		authSession.set(null);
-		clearIdentity();
-		return false;
+	} catch (error) {
+		if (error instanceof ApiError && error.status === 401) {
+			clearAuthentication();
+			return false;
+		}
+		return true;
 	}
 }
 
 export async function logout() {
-	const session = getAuthSnapshot();
 	try {
-		if (session) await revokeSession(session.accessToken);
+		await revokeSession();
 	} catch {
 		// Local logout must still succeed if the API is unavailable or the token already expired.
 	} finally {
-		authSession.set(null);
-		clearIdentity();
+		clearAuthentication();
 	}
 }
+
+export async function refreshSessionIfNeeded() {
+	const session = getAuthSnapshot();
+	if (session && !expiresSoon(session)) return true;
+	return Boolean(await refreshSession());
+}
+
+configureAuthLifecycle({
+	getAccessToken: getValidAccessToken,
+	onAuthenticationFailed: clearAuthentication
+});

@@ -64,6 +64,7 @@ export interface Identity {
 export interface AuthUser {
 	id: string;
 	publicKey: string;
+	displayName: string | null;
 }
 
 export interface AuthSession {

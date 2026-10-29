@@ -68,7 +68,7 @@
 	.button.primary {
 		background: var(--rose-400);
 		color: white;
-		box-shadow: 0 5px 14px rgba(124, 67, 67, 0.14);
+		box-shadow: 0 5px 14px var(--primary-shadow);
 	}
 
 	.button.primary:hover:not([aria-disabled='true']):not(:disabled) {
@@ -95,7 +95,7 @@
 	}
 
 	.button.danger {
-		background: var(--rose-text);
+		background: var(--danger);
 		color: white;
 	}
 

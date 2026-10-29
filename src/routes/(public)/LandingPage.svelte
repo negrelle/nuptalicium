@@ -3,9 +3,11 @@
 	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import Button from '$lib/components/Button.svelte';
+	import Arabesque from '$lib/components/Arabesque.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import { authStore, loginWithNip07 } from '$lib/stores/auth';
 	import { identityStore } from '$lib/stores/identity';
+	import { showValidationToast } from '$lib/stores/toast';
 	import type { AuthSession, Identity } from '$lib/types';
 	import { onMount } from 'svelte';
 
@@ -37,7 +39,7 @@
 
 	async function connect() {
 		if (!window.nostr) {
-			error = 'Instale uma extensão compatível com NIP-07, como Alby ou nos2x.';
+			showValidationToast('Instale uma extensão compatível com NIP-07, como Alby ou nos2x.');
 			return;
 		}
 
@@ -65,8 +67,16 @@
 
 <main class="page-shell auth-shell">
 	<section class="stack surface hero-panel">
-		<div class="stack" style="gap: 0.75rem;">
+		<div class="ornament ornament-top" aria-hidden="true">
+			<Arabesque />
+		</div>
+		<div class="ornament ornament-bottom" aria-hidden="true">
+			<Arabesque />
+		</div>
+
+		<div class="stack hero-copy">
 			<p class="eyebrow">Nuptalicium</p>
+			<Arabesque variant="divider" className="title-flourish" />
 			<h1>Conectar identidade Nostr</h1>
 			<p>
 				Uma camada privada para contratos nupciais construída sobre Nostr e Bitcoin Justice
@@ -112,8 +122,48 @@
 	}
 
 	.hero-panel {
+		position: relative;
+		z-index: 1;
+		isolation: isolate;
+		overflow: hidden;
 		width: min(100%, 52rem);
 		padding: clamp(1.5rem, 4vw, 3.5rem);
+	}
+
+	.hero-panel > :not(.ornament) {
+		position: relative;
+		z-index: 1;
+	}
+
+	.hero-copy {
+		gap: 0.75rem;
+	}
+
+	.ornament {
+		position: absolute;
+		z-index: 0;
+		color: var(--rose-300);
+		opacity: 0.32;
+		pointer-events: none;
+	}
+
+	.ornament-top {
+		top: -1px;
+		right: -1px;
+		transform: rotate(90deg);
+		transform-origin: center;
+	}
+
+	.ornament-bottom {
+		bottom: -1px;
+		right: -1px;
+		transform: rotate(180deg);
+		transform-origin: center;
+	}
+
+	:global(.title-flourish) {
+		margin: -0.2rem 0 0.15rem;
+		opacity: 0.78;
 	}
 
 	.eyebrow {
@@ -123,5 +173,23 @@
 		font-weight: 700;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
+	}
+
+	@media (max-width: 640px) {
+		.ornament {
+			opacity: 0.2;
+			transform: scale(0.72) rotate(90deg);
+		}
+
+		.ornament-top {
+			top: -1.3rem;
+			right: -1.3rem;
+		}
+
+		.ornament-bottom {
+			bottom: -1.3rem;
+			right: -1.3rem;
+			transform: scale(0.72) rotate(180deg);
+		}
 	}
 </style>

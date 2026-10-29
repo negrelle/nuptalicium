@@ -17,17 +17,32 @@ export class ApiError extends Error {
 	}
 }
 
-export async function apiRequest<T>(
-	path: string,
-	init: RequestInit = {},
-	accessToken?: string
-): Promise<T> {
+interface AuthLifecycle {
+	getAccessToken(forceRefresh: boolean, rejectedToken?: string): Promise<string | null>;
+	onAuthenticationFailed(): void;
+}
+
+let authLifecycle: AuthLifecycle | null = null;
+
+export function configureAuthLifecycle(lifecycle: AuthLifecycle) {
+	authLifecycle = lifecycle;
+}
+
+async function executeRequest(path: string, init: RequestInit, accessToken?: string) {
 	const headers = new Headers(init.headers);
 	headers.set('Accept', 'application/json');
 	if (init.body) headers.set('Content-Type', 'application/json');
 	if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+	else headers.delete('Authorization');
 
-	const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+	return fetch(`${API_BASE_URL}${path}`, {
+		...init,
+		headers,
+		credentials: init.credentials ?? 'include'
+	});
+}
+
+async function parseResponse<T>(response: Response): Promise<T> {
 	const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
 
 	if (!response.ok) {
@@ -41,4 +56,30 @@ export async function apiRequest<T>(
 	}
 
 	return body as T;
+}
+
+export async function apiRequest<T>(
+	path: string,
+	init: RequestInit = {},
+	accessToken?: string
+): Promise<T> {
+	let requestToken = accessToken;
+	if (requestToken && authLifecycle) {
+		requestToken = (await authLifecycle.getAccessToken(false, requestToken)) ?? undefined;
+		if (!requestToken) {
+			authLifecycle.onAuthenticationFailed();
+			throw new ApiError(401, 'Sua sessão expirou. Entre novamente para continuar.');
+		}
+	}
+
+	let response = await executeRequest(path, init, requestToken);
+	if (response.status === 401 && requestToken && authLifecycle) {
+		const refreshedToken = await authLifecycle.getAccessToken(true, requestToken);
+		if (refreshedToken) {
+			response = await executeRequest(path, init, refreshedToken);
+		}
+		if (response.status === 401 || !refreshedToken) authLifecycle.onAuthenticationFailed();
+	}
+
+	return parseResponse<T>(response);
 }

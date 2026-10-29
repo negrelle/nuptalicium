@@ -116,32 +116,44 @@
 			</div>
 		</Card>
 	{:else}
-		<div class="card-grid">
+		<div class="contract-list">
 			{#each result.content as contract (contract.id)}
 				<Card>
-					<div class="stack">
-						<div class="row card-heading">
-							<div class="stack compact">
-								<h2>{contract.title || 'Contrato sem título'}</h2>
-								{#if currentParticipant(contract)}
-									<p class="muted">Seu papel: {roleLabels[currentParticipant(contract)!.role]}</p>
-								{/if}
+					<article class="contract-row">
+						<div class="contract-identity stack compact">
+							<h2>{contract.title || 'Contrato sem título'}</h2>
+							{#if currentParticipant(contract)}
+								<p class="muted">Seu papel: {roleLabels[currentParticipant(contract)!.role]}</p>
+							{/if}
+						</div>
+						<div class="contract-counterparty">
+							<span class="detail-label">Outro cônjuge</span>
+							<strong class="technical truncate"
+								>{counterparty(contract)?.displayName ||
+									(counterparty(contract)
+										? pubkeyToNpub(counterparty(contract)!.publicKey)
+										: 'Não informado')}</strong
+							>
+						</div>
+						<div class="contract-details" aria-label="Resumo do contrato">
+							<div>
+								<span class="detail-label">Cláusulas</span>
+								<strong>{contract.clauses.length}</strong>
 							</div>
-							<ContractStatusBadge status={contract.status} />
+							<div>
+								<span class="detail-label">Aceites</span>
+								<strong>{contract.acceptances.length}/{contract.participants.length}</strong>
+							</div>
+							<div>
+								<span class="detail-label">Prazo</span>
+								<strong
+									>{contract.expiresAt ? formatDateTime(contract.expiresAt) : 'Sem prazo'}</strong
+								>
+							</div>
 						</div>
-						{#if counterparty(contract)}
-							<p class="technical truncate">
-								Outro cônjuge: {counterparty(contract)!.displayName ||
-									pubkeyToNpub(counterparty(contract)!.publicKey)}
-							</p>
-						{/if}
-						<div class="summary">
-							<span>{contract.clauses.length} cláusula(s)</span>
-							<span>{contract.acceptances.length}/{contract.participants.length} aceites</span>
-							<span>{formatDateTime(contract.expiresAt)}</span>
-						</div>
-						<Button href={`/contracts/${contract.id}`}>Abrir contrato</Button>
-					</div>
+						<ContractStatusBadge status={contract.status} />
+						<Button href={`/contracts/${contract.id}`} size="small">Abrir</Button>
+					</article>
 				</Card>
 			{/each}
 		</div>
@@ -161,12 +173,8 @@
 
 <style>
 	.heading,
-	.card-heading,
 	.pagination {
 		justify-content: space-between;
-	}
-	.card-heading {
-		align-items: start;
 	}
 	.compact {
 		gap: 0.35rem;
@@ -175,12 +183,42 @@
 		display: grid;
 		gap: 0.4rem;
 	}
-	.summary {
-		display: flex;
-		gap: 0.5rem 1rem;
-		flex-wrap: wrap;
+	.contract-list {
+		display: grid;
+		gap: 0.85rem;
+	}
+	.contract-row {
+		display: grid;
+		grid-template-columns: minmax(13rem, 1.4fr) minmax(10rem, 1fr) minmax(20rem, 1.65fr) auto auto;
+		align-items: center;
+		gap: 1.25rem;
+	}
+	.contract-identity h2 {
+		font-size: 1.05rem;
+	}
+	.contract-counterparty,
+	.contract-details > div {
+		display: grid;
+		gap: 0.25rem;
+		min-width: 0;
+	}
+	.contract-details {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.8rem;
+	}
+	.detail-label {
 		color: var(--gray-500);
-		font-size: 0.95rem;
+		font-size: 0.73rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+	.contract-details strong,
+	.contract-counterparty strong {
+		color: var(--gray-800);
+		font-size: 0.9rem;
+		font-weight: 650;
 	}
 	.truncate {
 		overflow: hidden;
@@ -189,5 +227,28 @@
 	}
 	.error {
 		color: var(--rose-text);
+	}
+	@media (max-width: 1050px) {
+		.contract-row {
+			grid-template-columns: minmax(14rem, 1.5fr) minmax(12rem, 1fr) auto auto;
+		}
+		.contract-details {
+			grid-column: 1 / -1;
+			grid-row: 2;
+		}
+	}
+	@media (max-width: 680px) {
+		.contract-row {
+			grid-template-columns: 1fr auto;
+			gap: 1rem;
+		}
+		.contract-counterparty {
+			grid-column: 1 / -1;
+		}
+		.contract-details {
+			grid-template-columns: 1fr;
+			grid-column: 1 / -1;
+			grid-row: auto;
+		}
 	}
 </style>

@@ -25,44 +25,44 @@
 	}
 
 	.status-draft {
-		border-color: #d6d6df;
-		background: #eeeef2;
-		color: #555665;
+		border-color: var(--status-draft-border);
+		background: var(--status-draft-bg);
+		color: var(--status-draft-text);
 	}
 
 	.status-pending-acceptance {
-		border-color: #e5c9c9;
-		background: #f7eaea;
-		color: #875050;
+		border-color: var(--status-pending-border);
+		background: var(--status-pending-bg);
+		color: var(--status-pending-text);
 	}
 
 	.status-awaiting-funding {
-		border-color: #e2d3b8;
-		background: #f5efe4;
-		color: #765e3d;
+		border-color: var(--status-funding-border);
+		background: var(--status-funding-bg);
+		color: var(--status-funding-text);
 	}
 
 	.status-active {
-		border-color: #c8dccb;
-		background: #eaf2eb;
-		color: #386641;
+		border-color: var(--status-active-border);
+		background: var(--status-active-bg);
+		color: var(--status-active-text);
 	}
 
 	.status-closed {
-		border-color: #c9d5dd;
-		background: #e9eef2;
-		color: #49616e;
+		border-color: var(--status-closed-border);
+		background: var(--status-closed-bg);
+		color: var(--status-closed-text);
 	}
 
 	.status-cancelled {
-		border-color: #e4bebe;
-		background: #f5e7e7;
-		color: #8e4545;
+		border-color: var(--danger-border);
+		background: var(--danger-bg);
+		color: var(--danger);
 	}
 
 	.status-expired {
-		border-color: #d7c8da;
-		background: #eee8ef;
-		color: #6f5574;
+		border-color: var(--status-expired-border);
+		background: var(--status-expired-bg);
+		color: var(--status-expired-text);
 	}
 </style>
