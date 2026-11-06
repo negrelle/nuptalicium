@@ -25,3 +25,6 @@ vite.config.ts.timestamp-*
 # IDEs
 .idea/
 .vscode/
+
+# AI Plugins
+graphify-out/
